@@ -43,16 +43,29 @@ Melee has always been an emulated game on the Mac: a PowerPC console, simulated 
 You need an Apple Silicon Mac (or an iPad, iPhone or Vision Pro), your own **Super Smash Bros. Melee NTSC 1.02** disc image (`.iso` or `.gcm`), and a free [Slippi account](https://slippi.gg) for online play.
 
 1. **Build the app** (about ten minutes the first time — see [Build from source](#build-from-source)).
-2. **Open iSlippi.** Choose your disc image (on iPad and iPhone, import it or drop it into the app's folder in Files). The app remembers it.
-3. **Sign in to Slippi** right in the launcher — email and password, no separate app. On a Mac that already has the Slippi Launcher signed in, that login is picked up automatically.
+2. **Open iSlippi.** The dashboard walks you through it: choose your disc image (on iPad and iPhone, import it or drop it into the app's folder in Files). The app remembers it.
+3. **Sign in to Slippi** right there — email and password, no separate app. You stay signed in, and the dashboard shows your ranked tier, rating, record, daily placement, most-played characters and your recent games.
 4. **Play.**
 
 <div align="center">
-<img src="docs/images/mac-launcher.jpg" width="420" alt="The macOS launcher: disc, Slippi account, widescreen and sharpening, Play">
+<img src="docs/images/mac-launcher.jpg" width="420" alt="The macOS dashboard: ranked profile, recent games, Slippi account, disc, controllers and display settings">
 &nbsp;&nbsp;
-<img src="docs/images/ipad-launcher.jpg" width="300" alt="The same launcher on iPad">
-<br><sub>The launcher on macOS and iPad: disc, Slippi account, a few settings, Play.</sub>
+<img src="docs/images/ipad-launcher.jpg" width="300" alt="The same dashboard on iPad">
+<br><sub>The dashboard on macOS and iPad (shown with sample data). Ranked stats come from Slippi's profile API; recent games are read from your own replays.</sub>
 </div>
+
+### The dashboard
+
+| Card | What it does |
+|---|---|
+| **Get started** | A checklist that ticks itself off: disc, sign-in, controller, Play. It disappears once you are set up. |
+| **Ranked** | Tier (Bronze through Grandmaster, using Slippi's thresholds), rating, wins and losses with a win-rate bar, daily global and regional placement, and your mains by games played. |
+| **Recent games** | Your last games parsed from the `.slp` replays the app writes: characters, opponent, stage, duration, and whether you won. |
+| **Slippi Online account** | Sign in, sign out, password reset. The session is kept on the device so ranked stats reload on every launch. |
+| **Game disc** | Choose or drop the disc image. |
+| **Controllers** | Every connected controller, its GameCube port (auto or fixed 1–4), and a remap flow: click a GameCube control, press the button you want. Mappings are saved per controller. |
+| **Display & performance** | Internal resolution (auto picks the display), anisotropic filtering, display sync, widescreen, sharpening, full screen on macOS, plus the GPU and the display's refresh rate so you can see what the app is running on. |
+| **On-screen controls** (iPad, iPhone) | Opacity and size of the touch controller. |
 
 ### Controls
 
@@ -65,7 +78,7 @@ You need an Apple Silicon Mac (or an iPad, iPhone or Vision Pro), your own **Sup
 | D-pad | T F G H |
 | Start | Return |
 
-Any controller SDL recognises works out of the box. A WUP-028 GameCube adapter takes priority on the ports it has controllers plugged into.
+Any controller SDL recognises works out of the box, over Bluetooth or a cable: PlayStation, Xbox, Switch Pro, MFi and most USB pads. On a Mac a WUP-028 GameCube adapter (the Nintendo Wii U / Switch one) is read directly over USB with the same 1 ms polling the real console uses and takes priority on the ports it has controllers plugged into. iPadOS and iOS do not expose raw USB devices to apps, so on those the adapter is not available; a Bluetooth or USB-C pad is the way to play with a physical controller there. Ports and button mappings are managed from the Controllers card on the dashboard.
 
 ### On iPad, iPhone and Vision Pro
 
@@ -86,7 +99,8 @@ Slippi is competitive, so the app uses what Apple devices offer for latency:
 | **Game Mode** | Declared as a game, so macOS and iOS give it CPU/GPU priority and cut Bluetooth controller latency in full screen. |
 | **Performance cores** | The simulation and render threads run at user-interactive QoS on Apple silicon. |
 | **Wi-Fi traffic class** | Netplay and matchmaking sockets use the voice service class, the lowest-latency Wi-Fi queue. |
-| **Controllers** | GameCube adapter (WUP-028) over USB, any Bluetooth or MFi pad with rumble, keyboard, and touch with haptics. |
+| **Controllers** | GameCube adapter (WUP-028) over USB on macOS, any Bluetooth or MFi pad with rumble, keyboard, and touch with haptics. Ports and mappings per controller. |
+| **Honest about refresh** | The game is a 60 Hz simulation and Slippi rollback depends on it staying that way; a 120 Hz display shortens the wait between a finished frame and the pixels, it does not double the frame rate. The dashboard shows the display's real maximum. |
 | **Metal** | Native renderer at integer multiples of the original resolution, supersampling, anisotropic filtering, contrast-adaptive sharpening. |
 
 ## Where it stands
