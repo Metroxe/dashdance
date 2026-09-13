@@ -45,7 +45,7 @@ bool apple_http(const char* method, const std::string& url, const std::string& h
     [session finishTasksAndInvalidate];
     if (failure) { if (error) *error = failure.localizedDescription.UTF8String; return false; }
     if (status) *status = http_response ? (int)http_response.statusCode : 0;
-    if (response) response->assign((const char*)received.bytes, received.length);
+    if (response) response->assign(received ? (const char*)received.bytes : "", received ? received.length : 0);
     return true;
   }
 }

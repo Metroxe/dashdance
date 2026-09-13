@@ -136,7 +136,8 @@ int main(int argc, char** argv) {
   gx::MetalOptions gfx;
   std::string script, iso_arg, user_dir, sys_dir, replay_dir, card_dir, profile_dir, cache_dir, log_file;
   bool offline = false, choose_disc = false;
-  float overlay_opacity_arg = -1.0f;
+  float overlay_opacity_arg = -1.0f, sharpness_arg = -1.0f;
+  bool widescreen_arg = false;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     auto next = [&]() -> const char* { if (i + 1 >= argc) { usage(); std::exit(2); } return argv[++i]; };
@@ -148,8 +149,8 @@ int main(int argc, char** argv) {
     else if (a == "--window") { if (std::sscanf(next(), "%ux%u", &window_w, &window_h) != 2 || window_w < 320 || window_h < 240) { usage(); return 2; } }
     else if (a == "--no-vsync") gfx.vsync = false;
     else if (a == "--scale") { std::string v = next(); gfx.efb_scale = v == "auto" ? 0 : std::atoi(v.c_str()); if (v != "auto" && gfx.efb_scale < 1) { usage(); return 2; } }
-    else if (a == "--widescreen") gfx.widescreen = true;
-    else if (a == "--sharpness") gfx.sharpness = std::clamp((float)std::atof(next()), 0.0f, 1.0f);
+    else if (a == "--widescreen") widescreen_arg = true;
+    else if (a == "--sharpness") sharpness_arg = std::clamp((float)std::atof(next()), 0.0f, 1.0f);
     else if (a == "--touch-overlay") host::touch_force_visible(true);
     else if (a == "--overlay-opacity") { overlay_opacity_arg = std::clamp((float)std::atof(next()), 0.0f, 1.0f); }
     else if (a == "--anisotropy") gfx.anisotropy = std::clamp(std::atoi(next()), 1, 16);
@@ -237,11 +238,8 @@ int main(int argc, char** argv) {
       if (fs::is_regular_file(iso_arg, ec)) settings.iso = iso_arg;
       else previous_error = "There is no disc image at " + iso_arg;
     }
-    settings.widescreen = settings.widescreen || gfx.widescreen;
     if (!host::launcher_run(settings, previous_error) || settings.iso.empty()) return 0;
     iso_arg = settings.iso;
-    gfx.widescreen = settings.widescreen;
-    gfx.sharpness = settings.sharpness;
     if (!settings.online) offline = true;
     if (ensure_dir(support.string(), "support")) {
       std::ofstream out(remembered, std::ios::trunc);
@@ -249,7 +247,11 @@ int main(int argc, char** argv) {
           << "\nsharpness=" << settings.sharpness << "\noverlay=" << settings.overlay_opacity << "\n";
     }
   }
-  host::touch_set_opacity(overlay_opacity_arg >= 0.0f ? overlay_opacity_arg : settings.overlay_opacity);   // the flag wins over the remembered value
+  // Command-line flags win over remembered launcher values.
+  host::touch_set_opacity(overlay_opacity_arg >= 0.0f ? overlay_opacity_arg : settings.overlay_opacity);
+  gfx.widescreen = widescreen_arg || settings.widescreen;
+  gfx.sharpness = sharpness_arg >= 0.0f ? sharpness_arg : settings.sharpness;
+  host::touch_set_game_aspect(gfx.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f);
   if (profile_dir.empty()) profile_dir = (support / "User").string();
   if (card_dir.empty()) card_dir = (fs::path(profile_dir) / "GC/CardA").string();
   if (replay_dir.empty()) replay_dir = (support / "Replays").string();
@@ -346,6 +348,8 @@ int main(int argc, char** argv) {
   slippi::shutdown();
   if (backend) {
     host::log("metal: %llu frames presented", (unsigned long long)gx::metal_frames_presented(backend));
+    host::window_set_resize_callback(nullptr);
+    gx::metal_set_overlay(backend, nullptr);
     delete backend;
   }
   host::window_destroy();

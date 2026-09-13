@@ -11,6 +11,7 @@ bool window_ui_gamecube_pad(PadState& pad) { pad = {}; pad.err = -1; return fals
 void window_set_resize_callback(ResizeCallback) {}
 void window_pump() {}
 void window_set_fullscreen(bool) {}
+void window_gamepad_rumble(int, bool) {}
 bool window_take_fullscreen_toggle() { return false; }
 double window_refresh_rate() { return 60.0; }
 void window_destroy() {}

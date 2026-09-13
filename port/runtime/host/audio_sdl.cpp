@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 #include <mutex>
 
 namespace host {

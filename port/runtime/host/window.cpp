@@ -71,6 +71,7 @@ void* window_create(int w, int h, const wchar_t* title, bool visible) {
   return g_hwnd;
 }
 
+void window_gamepad_rumble(int, bool) {}
 void window_set_fullscreen(bool enabled) {
   static WINDOWPLACEMENT saved{sizeof(WINDOWPLACEMENT)};
   static bool fullscreen = false;

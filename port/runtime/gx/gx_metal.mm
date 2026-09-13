@@ -609,14 +609,15 @@ class MetalBackend final : public Backend {
     }
   }
 
-  void present_efb(const EfbCopy& c) {
+  bool present_efb(const EfbCopy& c) {
     end_pass();
     // A second XFB copy in the same frame re-renders into the drawable already acquired.
+    const bool again = drawable_ != nil;
     id<CAMetalDrawable> drawable = drawable_ ?: [layer_ nextDrawable];
-    if (!drawable) return;
+    if (!drawable) return false;
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = drawable.texture;
-    rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+    rp.colorAttachments[0].loadAction = again ? MTLLoadActionLoad : MTLLoadActionClear;
     rp.colorAttachments[0].clearColor = MTLClearColorMake(0.05, 0.05, 0.15, 1);
     rp.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLRenderCommandEncoder> enc = [command_ renderCommandEncoderWithDescriptor:rp];
@@ -641,6 +642,7 @@ class MetalBackend final : public Backend {
     [enc endEncoding];
     drawable_ = drawable;
     last_present_ = c;
+    return true;
   }
 
   struct OvShape { float rect[4]; float color[4]; float params[4]; uint32_t label; float label_w, label_h, pad; };
@@ -753,7 +755,7 @@ class MetalBackend final : public Backend {
           execute_draw(frame, frame.draws[cmd.index], overrides ? overrides + cmd.index : nullptr);
         } else {
           const EfbCopy& c = frame.copies[cmd.index];
-          if (c.to_xfb) { if (!skip_present_) { present_efb(c); presented = true; } }
+          if (c.to_xfb) { if (!skip_present_ && present_efb(c)) presented = true; }
           else execute_copy(c);
           if (c.clear) clear_efb(c);
         }
