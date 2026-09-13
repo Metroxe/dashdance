@@ -7,6 +7,7 @@
 #include "gx_core.h"
 #include "gx_metal.h"
 #include "overlay.h"
+#include "slippi_login.h"
 #include "hle_dvd.h"
 #include "host.h"
 #include "mac_launcher.h"
@@ -55,7 +56,7 @@ void usage() {
       "  --anisotropy 1..16       anisotropic filtering (default 16)\n"
       "  --capture FILE.ppm       write the presented frame N (--capture-frame N)\n"
       "  --offline                disable Slippi Online services\n"
-      "  --user-dir DIR           Slippi folder holding user.json (default: the Slippi Launcher's)\n"
+      "  --user-dir DIR           Slippi folder holding user.json (default: this app's sign-in, else the Slippi Launcher's)\n"
       "  --online-delay N         Slippi Online input delay frames (default 2)\n"
       "  --chat on|direct|off     in-game chat availability\n"
       "  --netplay-port N         fixed local UDP port for netplay\n"
@@ -186,19 +187,55 @@ int main(int argc, char** argv) {
   if (iso_arg.empty()) { if (const char* env = std::getenv("MELEE_ISO")) iso_arg = env; }
 
   const fs::path support = fs::path(home_dir()) / "Library/Application Support/MeleeUnlocked";
-  // Without an explicit disc: reuse the last one, otherwise ask with a native open panel.
+  // Remembered launcher settings; command-line flags override them.
   const fs::path remembered = support / "launcher.ini";
-  if (iso_arg.empty() || choose_disc) {
-    std::string previous_error;
-    if (!choose_disc) {
-      std::ifstream in(remembered);
-      std::string line;
-      while (std::getline(in, line)) if (line.rfind("iso=", 0) == 0) iso_arg = line.substr(4);
-      std::error_code ec;
-      if (!iso_arg.empty() && !fs::is_regular_file(iso_arg, ec)) { previous_error = "The last disc image is no longer at " + iso_arg; iso_arg.clear(); }
+  host::LauncherSettings settings;
+  {
+    std::ifstream in(remembered);
+    std::string line;
+    while (std::getline(in, line)) {
+      auto value = [&](const char* key) -> const char* { size_t n = std::strlen(key); return line.compare(0, n, key) == 0 ? line.c_str() + n : nullptr; };
+      if (const char* v = value("iso=")) settings.iso = v;
+      else if (const char* v = value("widescreen=")) settings.widescreen = *v == '1';
+      else if (const char* v = value("online=")) settings.online = *v == '1';
+      else if (const char* v = value("sharpness=")) settings.sharpness = std::clamp((float)std::atof(v), 0.0f, 1.0f);
+      else if (const char* v = value("overlay=")) settings.overlay_opacity = std::clamp((float)std::atof(v), 0.0f, 1.0f);
     }
-    if (iso_arg.empty()) iso_arg = host::mac_choose_disc(previous_error);
-    if (iso_arg.empty()) return 0;
+  }
+  // Slippi login: this app's own user.json (native sign-in) wins over the Slippi Launcher's file.
+  settings.slippi_dir = (support / "Slippi").string();
+  {
+    slippi::login::Account account;
+    if (slippi::login::read_user_file(settings.slippi_dir, account)) {
+      settings.account_name = account.display_name; settings.account_code = account.connect_code;
+    } else if (const std::string launcher_dir = find_slippi_user_dir(); !launcher_dir.empty() && slippi::login::read_user_file(launcher_dir, account)) {
+      settings.account_name = account.display_name; settings.account_code = account.connect_code; settings.account_from_launcher = true;
+    }
+  }
+  const bool show_launcher = iso_arg.empty() || choose_disc;
+  if (show_launcher) {
+    std::string previous_error;
+    std::error_code ec;
+#if TARGET_OS_IPHONE
+    // The sandbox container moves between installs: find the remembered disc by name in Documents.
+    if (!settings.iso.empty() && !fs::is_regular_file(settings.iso, ec)) {
+      const fs::path by_name = fs::path(home_dir()) / "Documents" / fs::path(settings.iso).filename();
+      if (fs::is_regular_file(by_name, ec)) settings.iso = by_name.string();
+    }
+#endif
+    if (!settings.iso.empty() && !fs::is_regular_file(settings.iso, ec)) { previous_error = "The last disc image is no longer at " + settings.iso; settings.iso.clear(); }
+    if (!iso_arg.empty()) settings.iso = iso_arg;
+    settings.widescreen = settings.widescreen || gfx.widescreen;
+    if (!host::launcher_run(settings, previous_error) || settings.iso.empty()) return 0;
+    iso_arg = settings.iso;
+    gfx.widescreen = settings.widescreen;
+    gfx.sharpness = settings.sharpness;
+    host::touch_set_opacity(settings.overlay_opacity);
+    if (!settings.online) offline = true;
+    ensure_dir(support.string(), "support");
+    std::ofstream out(remembered, std::ios::trunc);
+    out << "iso=" << settings.iso << "\nwidescreen=" << (settings.widescreen ? 1 : 0) << "\nonline=" << (settings.online ? 1 : 0)
+        << "\nsharpness=" << settings.sharpness << "\noverlay=" << settings.overlay_opacity << "\n";
   }
   if (profile_dir.empty()) profile_dir = (support / "User").string();
   if (card_dir.empty()) card_dir = (fs::path(profile_dir) / "GC/CardA").string();
@@ -210,7 +247,11 @@ int main(int argc, char** argv) {
   for (const auto& [dir, what] : std::vector<std::pair<std::string, const char*>>{
            {profile_dir, "profile"}, {card_dir, "memory card"}, {replay_dir, "replay"}, {cache_dir, "cache"}})
     if (!ensure_dir(dir, what)) return 2;
-  if (!offline && user_dir.empty()) user_dir = find_slippi_user_dir();
+  if (!offline && user_dir.empty()) {
+    std::error_code ec;
+    if (fs::is_regular_file(fs::path(settings.slippi_dir) / "user.json", ec)) user_dir = settings.slippi_dir;
+    else user_dir = find_slippi_user_dir();
+  }
   if (!offline && user_dir.empty()) {
     user_dir = (support / "Slippi").string();
     ensure_dir(user_dir, "Slippi user");
@@ -240,7 +281,6 @@ int main(int argc, char** argv) {
     host::mac_show_error("Could not load this disc image", "Melee Unlocked needs an unmodified Super Smash Bros. Melee NTSC 1.02 image.\n\n" + o.iso);
     return 1;
   }
-  { std::ofstream out(remembered, std::ios::trunc); out << "iso=" << o.iso << "\n"; }
 
   gecko::option_widescreen = gfx.widescreen;   // before the game loads the code table
   gx::Backend* backend = nullptr;
@@ -251,6 +291,7 @@ int main(int argc, char** argv) {
     int client_w = 0, client_h = 0;
     host::window_client_size(&client_w, &client_h);
     backend = gx::create_metal_backend(layer, client_w, client_h, gfx);
+    host::log("display: %.0f Hz refresh; the game simulates at 60 Hz and each frame is shown on the next refresh slot", host::window_refresh_rate());
     host::window_set_resize_callback([backend](int w, int h) { gx::metal_resize(backend, w, h); });
     gx::metal_set_overlay(backend, host::touch_overlay);
     host::g_has_window = true;

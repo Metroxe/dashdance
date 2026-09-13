@@ -15,6 +15,14 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 sed "s/@VERSION@/$VERSION/g" "$ROOT/port/app/macos/Info.plist" > "$APP/Contents/Info.plist"
 cp "$EXE" "$APP/Contents/MacOS/MeleeUnlocked"
 cp -R "$ROOT/port/slippi_sys" "$APP/Contents/Resources/slippi_sys"
+# App icon from the 1024px master (drawn by tools/make_icons.py; no game assets).
+ICONSET="$(mktemp -d)/AppIcon.iconset"
+mkdir -p "$ICONSET"
+for size in 16 32 128 256 512; do
+  sips -z $size $size "$ROOT/port/app/icons/AppIcon-1024.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+  sips -z $((size*2)) $((size*2)) "$ROOT/port/app/icons/AppIcon-1024.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 codesign --force --sign - --deep "$APP"
 codesign --verify --deep --strict "$APP"

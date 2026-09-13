@@ -457,6 +457,7 @@ endif()
   endif()
   if(MELEE_DEVICE_TARGET)
     set(PORT_APPLE_LAUNCHER_SOURCE runtime/host/ios_launcher.mm)
+    set(PORT_APPLE_UTI_FRAMEWORK "-framework UniformTypeIdentifiers")
     set(PORT_APPLE_UI_FRAMEWORK "-framework UIKit")
   else()
     set(PORT_APPLE_LAUNCHER_SOURCE runtime/host/mac_launcher.mm)
@@ -465,7 +466,7 @@ endif()
   # The application renders with the native Metal backend and talks to SDL3 directly;
   # Aurora is only built here for its vendored SDL3.
   add_library(runtime_mac STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} runtime/hle/slippi_text.cpp
-    runtime/hle/slippi_http_apple.mm
+    runtime/hle/slippi_http_apple.mm runtime/hle/slippi_login.cpp
     runtime/host/window_sdl.cpp runtime/host/audio_sdl.cpp runtime/host/haptics_apple.mm
     ${PORT_GC_ADAPTER_SOURCE} ${PORT_APPLE_LAUNCHER_SOURCE}
     runtime/gx/gx_metal.mm runtime/gx/gx_msl.cpp)
@@ -479,7 +480,7 @@ endif()
     MELEE_PORT_INPUT_MANIFEST_PATH="${MELEE_PORT_INPUT_MANIFEST}"
     MELEE_PORT_INPUT_MANIFEST_SHA256="${MELEE_PORT_INPUT_MANIFEST_SHA256}")
   target_link_libraries(runtime_mac PUBLIC native_animation port_build_options Threads::Threads port_enet
-    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation" "-framework Metal" "-framework QuartzCore" "-framework CoreText" "-framework CoreGraphics"
+    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation" "-framework Metal" "-framework QuartzCore" "-framework CoreText" "-framework CoreGraphics" ${PORT_APPLE_UTI_FRAMEWORK}
     ${AURORA_SDL3_TARGET})
   if(LIBUSB_FOUND AND NOT MELEE_DEVICE_TARGET)
     target_link_libraries(runtime_mac PUBLIC PkgConfig::LIBUSB)
@@ -499,6 +500,10 @@ endif()
     # The Slippi Sys folder ships inside the bundle so the app is self-contained.
     add_custom_command(TARGET melee_port_mac POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/slippi_sys"
+      COMMAND ${CMAKE_COMMAND} -E copy
+        "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon60x60@2x.png" "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon60x60@3x.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon76x76@2x.png" "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon83.5x83.5@2x.png"
+        "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/"
       VERBATIM)
   endif()
   target_link_libraries(melee_port_mac PRIVATE runtime_mac guest)

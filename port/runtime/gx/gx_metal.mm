@@ -173,6 +173,9 @@ class MetalBackend final : public Backend {
 #if TARGET_OS_OSX
     layer_.displaySyncEnabled = opts_.vsync;
 #endif
+    // Double-buffered swapchain: the simulation runs at 60 Hz and a finished frame should reach
+    // the next refresh slot (120 Hz on ProMotion) instead of queueing behind another drawable.
+    layer_.maximumDrawableCount = 2;
     queue_ = [device_ newCommandQueue];
     frame_semaphore_ = dispatch_semaphore_create(FRAME_SLOTS);
     for (int i = 0; i < FRAME_SLOTS; ++i) {

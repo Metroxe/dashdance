@@ -20,7 +20,15 @@
     <string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
   <key>UIRequiresFullScreen</key><true/>
   <key>UIStatusBarHidden</key><true/>
+  <key>CADisableMinimumFrameDurationOnPhone</key><true/>
   <key>UILaunchScreen</key><dict/>
+  <key>CFBundleIcons</key><dict>
+    <key>CFBundlePrimaryIcon</key><dict>
+      <key>CFBundleIconFiles</key><array><string>AppIcon60x60</string><string>AppIcon76x76</string><string>AppIcon83.5x83.5</string></array>
+      <key>UIPrerenderedIcon</key><false/></dict></dict>
+  <key>CFBundleIcons~ipad</key><dict>
+    <key>CFBundlePrimaryIcon</key><dict>
+      <key>CFBundleIconFiles</key><array><string>AppIcon60x60</string><string>AppIcon76x76</string><string>AppIcon83.5x83.5</string></array></dict></dict>
   <key>GCSupportsControllerUserInteraction</key><true/>
   <key>UIApplicationSupportsIndirectInputEvents</key><true/>
   <key>NSLocalNetworkUsageDescription</key><string>Slippi Online connects directly to your opponent.</string>

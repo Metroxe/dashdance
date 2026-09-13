@@ -1,0 +1,3 @@
+# Firebase *web* API key of the Slippi project: a public client identifier shipped in
+# every Slippi Launcher build, not a credential (Firebase enforces access server-side).
+port/runtime/hle/slippi_login.cpp:gcp-api-key:13
