@@ -4,6 +4,7 @@
 # --- MSL / runtime ---
 __write_console
 __longjmp
+longjmp
 __read_console
 exit
 

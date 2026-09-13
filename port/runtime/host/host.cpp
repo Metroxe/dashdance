@@ -610,10 +610,20 @@ uint32_t mmio_read(uint32_t addr, int bytes) {
   if ((addr & 0xF8000000u) == 0xC8000000u) return 0;  // EFB peek
   static int reported = 0;
   if (reported++ < 20) {
-    log("mmio read %08X (%d) from %s lr=%08X", addr, bytes, symbol_name(cpu->last_pc), cpu->lr);
+    log("mmio read %08X (%d) from %s lr=%08X retrace=%u", addr, bytes, symbol_name(cpu->last_pc), cpu->lr, retrace_count());
     if (reported <= 2) {
       log("  recent entries:");
       for (uint32_t i = 48; i < 64; ++i) { uint32_t pc = cpu->trace[(cpu->trace_pos + i) & 63]; if (pc) log("    %08X %s", pc, symbol_name(pc)); }
+      for (int r = 0; r < 32; r += 8)
+        log("  r%02d %08X %08X %08X %08X %08X %08X %08X %08X", r, cpu->r[r], cpu->r[r + 1], cpu->r[r + 2], cpu->r[r + 3], cpu->r[r + 4], cpu->r[r + 5], cpu->r[r + 6], cpu->r[r + 7]);
+      // Guest memory around pointer-looking registers: the corrupted object is usually one of them.
+      for (int r : {3, 4, 5, 6, 27, 28, 29, 30, 31}) {
+        uint32_t p = cpu->r[r];
+        if ((p & 0xFE000000u) != 0x80000000u || (p & 0x01FFFFFFu) + 96 > ppc::RAM_SIZE) continue;
+        char line[200]; int n = std::snprintf(line, sizeof line, "  [r%d=%08X]", r, p);
+        for (int i = 0; i < 20; ++i) n += std::snprintf(line + n, sizeof line - n, " %08X", rd32(p + 4u * (uint32_t)i));
+        log("%s", line);
+      }
     }
   }
   return 0;

@@ -238,7 +238,7 @@ def main():
                 hle.add(line)
     missing = sorted(n for n in hle if n not in symbols.by_name)
     if missing:
-        print("warning: HLE names not in symbol map:", ", ".join(missing))
+        print("warning: HLE names not in symbol map (they will be recompiled instead of hooked):", ", ".join(missing))
     hle_funcs = {n for n in hle if n in symbols.by_name}
     if gs is not None:
         try:

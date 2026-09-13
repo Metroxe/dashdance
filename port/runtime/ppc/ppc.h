@@ -168,24 +168,37 @@ inline uint64_t ld64(Context& c, uint8_t* m, uint32_t ea) {
   if (uint8_t* p = slowptr(ea)) { uint64_t v; std::memcpy(&v, p, 8); return bswap64(v); }
   return mmio_read64(c, ea);
 }
+// Store watchpoint (MELEE_WATCH_ADDR / MELEE_WATCH_LEN): one compare on the store path.
+extern uint32_t g_watch_lo, g_watch_len, g_watch_value;
+extern bool g_watch_value_on;
+void watch_hit(Context& c, uint32_t ea, uint64_t v, int bytes);
+void watch_init();   // reads MELEE_WATCH_ADDR / MELEE_WATCH_LEN / MELEE_WATCH_VALUE
+inline void watch(Context& c, uint32_t ea, uint64_t v, int bytes) {
+  if (__builtin_expect(ea + (uint32_t)bytes - g_watch_lo < g_watch_len + (uint32_t)bytes, 0)) watch_hit(c, ea, v, bytes);
+  if (__builtin_expect(g_watch_value_on && bytes >= 4 && ((uint32_t)v == g_watch_value || (bytes == 8 && (uint32_t)(v >> 32) == g_watch_value)), 0)) watch_hit(c, ea, v, bytes);
+}
 inline void st8(Context& c, uint8_t* m, uint32_t ea, uint32_t v) {
+  watch(c, ea, v, 1);
   if (uint8_t* p = fast(m, ea)) { *p = (uint8_t)v; return; }
   if (uint8_t* p = slowptr(ea)) { *p = (uint8_t)v; return; }
   mmio_write(c, ea, v & 0xFF, 1);
 }
 inline void st16(Context& c, uint8_t* m, uint32_t ea, uint32_t v) {
+  watch(c, ea, v, 2);
   uint16_t s = bswap16((uint16_t)v);
   if (uint8_t* p = fast(m, ea)) { std::memcpy(p, &s, 2); return; }
   if (uint8_t* p = slowptr(ea)) { std::memcpy(p, &s, 2); return; }
   mmio_write(c, ea, v & 0xFFFF, 2);
 }
 inline void st32(Context& c, uint8_t* m, uint32_t ea, uint32_t v) {
+  watch(c, ea, v, 4);
   uint32_t s = bswap32(v);
   if (uint8_t* p = fast(m, ea)) { std::memcpy(p, &s, 4); return; }
   if (uint8_t* p = slowptr(ea)) { std::memcpy(p, &s, 4); return; }
   mmio_write(c, ea, v, 4);
 }
 inline void st64(Context& c, uint8_t* m, uint32_t ea, uint64_t v) {
+  watch(c, ea, v, 8);
   uint64_t s = bswap64(v);
   if (uint8_t* p = fast(m, ea)) { std::memcpy(p, &s, 8); return; }
   if (uint8_t* p = slowptr(ea)) { std::memcpy(p, &s, 8); return; }

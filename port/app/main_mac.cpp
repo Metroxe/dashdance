@@ -315,6 +315,7 @@ int main(int argc, char** argv) {
     audio_opened = true;
 
     ppc::init_dispatch();
+    ppc::watch_init();
     {
       ppc::ScopedGuestFpEnvironment fp_environment(0);
       host::boot_setup();

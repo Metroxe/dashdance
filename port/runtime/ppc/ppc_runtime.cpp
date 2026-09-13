@@ -216,6 +216,28 @@ void hang_check(Context& c) {
   if (now - stuck_since > host::options.hang_watch) fatal(c, "no retrace for too long (guest spin loop?)", retraces);
 }
 
+uint32_t g_watch_lo = 0, g_watch_len = 0, g_watch_value = 0;
+bool g_watch_value_on = false;
+void watch_init() {
+  if (const char* v = std::getenv("MELEE_WATCH_VALUE")) {
+    g_watch_value = (uint32_t)std::strtoul(v, nullptr, 0); g_watch_value_on = true;
+    host::log("watch: stores of the word %08X are logged", g_watch_value);
+  }
+  const char* a = std::getenv("MELEE_WATCH_ADDR");
+  if (!a) return;
+  g_watch_lo = (uint32_t)std::strtoul(a, nullptr, 0);
+  const char* l = std::getenv("MELEE_WATCH_LEN");
+  g_watch_len = l ? (uint32_t)std::strtoul(l, nullptr, 0) : 4u;
+  host::log("watch: stores to %08X..%08X are logged", g_watch_lo, g_watch_lo + g_watch_len);
+}
+void watch_hit(Context& c, uint32_t ea, uint64_t v, int bytes) {
+  static int reported = 0;
+  if (reported++ >= 200) return;
+  host::log("watch: store %d bytes at %08X = %0*llX in %s (%08X) lr=%08X retrace=%u", bytes, ea, bytes * 2, (unsigned long long)v,
+            host::symbol_name(c.last_pc), c.last_pc, c.lr, host::retrace_count());
+  if (reported <= 3) for (uint32_t i = 52; i < 64; ++i) { uint32_t pc = c.trace[(c.trace_pos + i) & 63]; if (pc) host::log("    %08X %s", pc, host::symbol_name(pc)); }
+}
+
 void longjmp_restore(Context& c, uint8_t* m, uint32_t buf, uint32_t val) {
   // MSL jmp_buf: +0 LR, +4 CR, +8 r1, +12 r2, +20 r13..r31, +96 f14..f31, +240 FPSCR (as a double).
   c.lr = ld32(c, m, buf);

@@ -100,7 +100,11 @@ HLE(AIStartDMA) {
 
 namespace hle {
 // longjmp cannot return through the host call stack; the setjmp caller catches this (ppc.h).
+// The symbol map names the MSL routine `longjmp` (older maps: `__longjmp`); both must be hooked,
+// otherwise the recompiled routine restores the registers and returns into the callback, which
+// then keeps running with the setjmp caller's registers and corrupts whatever it touches.
 void __longjmp(ppc::Context& c, uint8_t*) { throw ppc::GuestLongJmp{c.r[3], c.r[4]}; }
+void longjmp(ppc::Context& c, uint8_t*) { throw ppc::GuestLongJmp{c.r[3], c.r[4]}; }
 // Called at interrupt-safe points (see host::pump_completions / host::retrace).
 void audio_tick(bool force) {
   static bool ticking = false;
