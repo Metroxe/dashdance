@@ -14,6 +14,12 @@
 #include "gecko_data.h"
 #include <chrono>
 #include <mutex>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
+#include <pthread.h>
+#endif
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -445,7 +451,7 @@ double frame_time() { return g_frame_time; }
 static double g_sim_costs[SIM_COST_COUNT];
 static double g_sim_costs_window[SIM_COST_COUNT];   // accumulated over the 60-frame log interval
 static double g_sim_ms_window = 0, g_sim_ms_worst = 0;
-static const char* const g_sim_cost_names[SIM_COST_COUNT] = {"disc", "ax", "jukebox", "exi", "texsnap", "queue", "observe"};
+static const char* const g_sim_cost_names[SIM_COST_COUNT] = {"disc", "ax", "jukebox", "exi", "texsnap", "queue", "observe", "render", "texture", "pump", "gpuwait", "drawable"};
 static double g_sim_frame_start = 0.0, g_last_sim_ms = 0.0;
 void sim_cost_add(int slot, double seconds) { if (slot >= 0 && slot < SIM_COST_COUNT) { g_sim_costs[slot] += seconds; g_sim_costs_window[slot] += seconds; } }
 // "sim: 3.1 ms/frame (worst 12.4) | observe 0.9 texsnap 0.4" for the periodic frame log.
@@ -465,6 +471,55 @@ static std::string sim_cost_line(uint32_t frames) {
 }
 double last_sim_frame_ms() { return g_last_sim_ms; }
 
+void simulation_thread_realtime() {
+#if defined(__APPLE__)
+  if (const char* e = std::getenv("MELEE_REALTIME")) if (*e == '0') return;
+  mach_timebase_info_data_t tb; mach_timebase_info(&tb);
+  const double ns_per_tick = (double)tb.numer / (double)tb.denom;
+  auto ticks = [&](double ms) { return (uint32_t)(ms * 1e6 / ns_per_tick); };
+  thread_time_constraint_policy_data_t policy;
+  policy.period = ticks(16.667);       // one simulation frame
+  policy.computation = ticks(5.0);     // typical work per frame (simulation plus render encoding)
+  policy.constraint = ticks(12.0);     // must be done well inside the period
+  policy.preemptible = TRUE;
+  kern_return_t kr = thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&policy, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+  log("simulation thread: real-time scheduling %s (period 16.7 ms, computation 5 ms, constraint 12 ms)", kr == KERN_SUCCESS ? "on" : "unavailable");
+#endif
+}
+
+// ---- display phase lock (see host.h). Latency as a function of submission phase is a sawtooth:
+// it falls as the grid moves later, then jumps by a display period once a frame misses its
+// refresh. The lock walks later while the latest latency sits above the recent floor plus a
+// margin, and steps back a little when it sees a jump. Nothing here changes the 60 Hz average.
+static std::mutex g_phase_mutex;
+static double g_phase_latency = -1, g_phase_period = 0;    // newest report
+static double g_phase_floor = 1e9;                         // lowest latency seen in the current window
+static int g_phase_window = 0, g_phase_hold = 0;
+static double g_phase_total_ms = 0;                        // cumulative shift, for the log
+void present_feedback(double latency_ms, double display_period_ms) {
+  std::lock_guard<std::mutex> lock(g_phase_mutex);
+  g_phase_latency = latency_ms; g_phase_period = display_period_ms;
+}
+static double phase_lock_shift_ms() {
+  double latency, period;
+  { std::lock_guard<std::mutex> lock(g_phase_mutex); latency = g_phase_latency; period = g_phase_period; g_phase_latency = -1; }
+  if (latency < 0 || period <= 0 || g_emulation_speed != 1.0) return 0;
+  if (g_phase_hold > 0) { --g_phase_hold; return 0; }
+  const double margin = 1.5;
+  if (latency < g_phase_floor) g_phase_floor = latency;
+  if (++g_phase_window >= 240) { g_phase_window = 0; g_phase_floor = latency; }   // let the floor rise again if the pipeline changes
+  double shift = 0;
+  if (latency > g_phase_floor + period * 0.6) {           // wrapped: a frame missed its refresh, back off and hold
+    shift = -std::min(3.0, period * 0.25); g_phase_hold = 30;
+    g_phase_floor = 1e9; g_phase_window = 0;
+  } else if (latency > g_phase_floor + margin) {          // still slack before the refresh: creep later
+    shift = std::min(0.25, (latency - g_phase_floor - margin) * 0.2);
+  }
+  g_phase_total_ms += shift;
+  return shift;
+}
+double phase_lock_total_ms() { return g_phase_total_ms; }
+
 void retrace() {
   struct Guard { Guard() { g_in_retrace = true; } ~Guard() { g_in_retrace = false; } } guard;
   ++g_retraces;
@@ -474,7 +529,7 @@ void retrace() {
       g_last_sim_ms = (now - g_sim_frame_start) * 1000.0;
       g_sim_ms_window += g_last_sim_ms;
       if (g_last_sim_ms > g_sim_ms_worst) g_sim_ms_worst = g_last_sim_ms;
-      if (g_last_sim_ms > 20.0) {
+      if (g_last_sim_ms > 16.7) {
         char detail[256] = ""; size_t n = 0;
         for (int i = 0; i < SIM_COST_COUNT; ++i) if (g_sim_costs[i] * 1000.0 >= 0.5) n += (size_t)std::snprintf(detail + n, sizeof detail - n, " %s %.1f", g_sim_cost_names[i], g_sim_costs[i] * 1000.0);
         log("sim frame %u took %.1f ms (ms:%s%s)", g_retraces, g_last_sim_ms, detail, n ? "" : " guest code");
@@ -484,9 +539,9 @@ void retrace() {
   }
   slippi::poll_options();
   advance_frame();
-  if (g_has_window) window_pump();
+  if (g_has_window) { SimCostScope pump(SIM_PUMP); window_pump(); }
   if (!options.fast) {
-    g_next_frame += std::chrono::microseconds((long long)(16667.0 / g_emulation_speed));
+    g_next_frame += std::chrono::microseconds((long long)(16667.0 / g_emulation_speed + phase_lock_shift_ms() * 1000.0));
     auto now = std::chrono::steady_clock::now();
     if (g_next_frame > now) std::this_thread::sleep_until(g_next_frame);
     else if (now - g_next_frame > std::chrono::milliseconds(34)) g_next_frame = now;   // after a stall, resume at 60 Hz instead of sprinting to catch up (audio would crackle)

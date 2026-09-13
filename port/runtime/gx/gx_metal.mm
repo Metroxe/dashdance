@@ -7,7 +7,12 @@
 #include "gx_regs.h"
 #include "gx_shader.h"
 #include "gx_texture.h"
+#include "frame_queue.h"
 #include "host.h"
+#include "window.h"
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <CoreText/CoreText.h>
 #include <dispatch/dispatch.h>
 #include <pthread/qos.h>
@@ -171,6 +176,7 @@ class MetalBackend final : public Backend {
     layer_.device = device_;
     layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
     layer_.framebufferOnly = YES;
+    layer_.opaque = YES;   // with a full-screen window this lets the compositor hand the drawable straight to the display (no extra frame of latency)
     layer_.drawableSize = CGSizeMake(client_w_, client_h_);
 #if TARGET_OS_OSX
     layer_.displaySyncEnabled = opts_.vsync;
@@ -352,7 +358,9 @@ class MetalBackend final : public Backend {
     ca.sourceAlphaBlendFactor = MTLBlendFactorOne; ca.destinationAlphaBlendFactor = MTLBlendFactorZero; ca.alphaBlendOperation = MTLBlendOperationAdd;
     ca.writeMask = (bits(bm, 3, 1) ? (MTLColorWriteMaskRed | MTLColorWriteMaskGreen | MTLColorWriteMaskBlue) : 0) | (bits(bm, 4, 1) ? MTLColorWriteMaskAlpha : 0);
     NSError* error = nil;
+    const double t0 = host::now_seconds();
     id<MTLRenderPipelineState> state = [device_ newRenderPipelineStateWithDescriptor:d error:&error];
+    pso_ms_ += (host::now_seconds() - t0) * 1000.0; ++psos_;
     if (!state) {
       host::log("metal: pipeline build failed: %s", error.localizedDescription.UTF8String);
       return nil;
@@ -370,7 +378,9 @@ class MetalBackend final : public Backend {
     }
     MTLCompileOptions* options = [MTLCompileOptions new];
     options.fastMathEnabled = NO;
+    const double t0 = host::now_seconds();
     id<MTLLibrary> lib = [device_ newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()] options:options error:&error];
+    compile_ms_ += (host::now_seconds() - t0) * 1000.0; ++compiles_;
     if (!lib) {
       host::log("metal: %s %016llX failed: %s", what, (unsigned long long)hash, error.localizedDescription.UTF8String);
       if (shader_failures_++ < 4) {
@@ -406,6 +416,7 @@ class MetalBackend final : public Backend {
     const uint64_t key = t.data->hash ^ hash_bytes(meta, sizeof meta);
     auto it = textures_.find(key);
     if (it != textures_.end()) { it->second.last_used = frame_counter_; return it->second.texture; }
+    host::SimCostScope texture_cost(host::SIM_TEXTURE);
     TextureEntry e;
     e.width = t.width; e.height = t.height; e.levels = std::max(1u, t.mip_levels); e.last_used = frame_counter_;
     MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:t.width height:t.height mipmapped:e.levels > 1];
@@ -661,7 +672,8 @@ class MetalBackend final : public Backend {
     end_pass();
     // A second XFB copy in the same frame re-renders into the drawable already acquired.
     const bool again = drawable_ != nil;
-    id<CAMetalDrawable> drawable = drawable_ ?: [layer_ nextDrawable];
+    id<CAMetalDrawable> drawable = drawable_;
+    if (!drawable) { host::SimCostScope wait_cost(host::SIM_DRAWABLE); drawable = [layer_ nextDrawable]; }   // blocks while the display still holds both drawables
     if (!drawable) return false;
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = drawable.texture;
@@ -785,14 +797,16 @@ class MetalBackend final : public Backend {
   }
 
   void submit(const Frame& frame, const DrawMatrices* overrides) {
+    host::SimCostScope render_cost(host::SIM_RENDER);   // the Metal backend encodes on the simulation thread
     trace_draws_ = 0; draw_index_ = 0;
     per_draw_keep_.clear();   // previous frames' diagnostic buffers (retained by their command buffers until completion)
     static thread_local bool qos_set = false;
     if (!qos_set) { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0); qos_set = true; }   // render thread on performance cores
     @autoreleasepool {
       if (opts_.efb_scale == 0 && pick_scale() != scale_) { wait_idle(); efb_copies_.clear(); create_efb(); }
-      dispatch_semaphore_wait(frame_semaphore_, DISPATCH_TIME_FOREVER);
+      { host::SimCostScope wait_cost(host::SIM_GPUWAIT); dispatch_semaphore_wait(frame_semaphore_, DISPATCH_TIME_FOREVER); }   // blocks only when FRAME_SLOTS command buffers are still executing
       ++frame_counter_;
+      if (frame_counter_ % 120 == 1) refresh_period_ms_ = 1000.0 / std::max(host::window_refresh_rate(), 1.0);   // display can change (window moved, ProMotion)
       slot_ = (int)(frame_counter_ % FRAME_SLOTS);
       vertex_ring_[slot_].used = index_ring_[slot_].used = constant_ring_[slot_].used = 0;
       ring_full_logged_ = false;
@@ -816,9 +830,27 @@ class MetalBackend final : public Backend {
         const bool wanted = (opts_.capture_frame && n == opts_.capture_frame) || (opts_.capture_every && n % opts_.capture_every == 0);
         if (wanted) pending_capture_ = true;
       }
-      if (drawable_) [command_ presentDrawable:drawable_];
+      if (drawable_) {
+        [command_ presentDrawable:drawable_];
+        // Latency accounting: XFB copy on the simulation thread -> pixels on the panel. The
+        // window average and worst are logged every 60 presented frames (MELEE_METAL_LATENCY=1).
+        if (latency_log_ || phase_lock_) {
+          const double submitted = frame.time > 0.0 ? frame.time : host::now_seconds();
+          const double render_start = CACurrentMediaTime();
+          const double clock_offset = host::now_seconds() - render_start;   // presentedTime is on the CA clock
+          __block MetalBackend* self_ = this;
+          [drawable_ addPresentedHandler:^(id<MTLDrawable> d) {
+            const double presented = d.presentedTime > 0.0 ? d.presentedTime : CACurrentMediaTime();
+            self_->latency_note((presented + clock_offset - submitted) * 1000.0, (presented - render_start) * 1000.0);
+          }];
+        }
+      }
       dispatch_semaphore_t semaphore = frame_semaphore_;
-      [command_ addCompletedHandler:^(id<MTLCommandBuffer>) { dispatch_semaphore_signal(semaphore); }];
+      __block MetalBackend* self_gpu = this;
+      [command_ addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+        dispatch_semaphore_signal(semaphore);
+        self_gpu->gpu_note((cb.GPUEndTime - cb.GPUStartTime) * 1000.0, (cb.GPUStartTime - cb.kernelStartTime) * 1000.0);
+      }];
       [command_ commit];
       if (pending_capture_) {
         [command_ waitUntilCompleted];
@@ -832,10 +864,43 @@ class MetalBackend final : public Backend {
         capture(last_present_, path);
       }
       command_ = nil; drawable_ = nil;
+      if (compiles_ || psos_) {
+        if (compile_ms_ + pso_ms_ >= 4.0 || compile_log_all_)
+          host::log("metal: frame %llu compiled %u shaders (%.1f ms) and %u pipelines (%.1f ms) on the render path", (unsigned long long)frame_counter_, compiles_, compile_ms_, psos_, pso_ms_);
+        compile_total_ms_ += compile_ms_ + pso_ms_; compile_ms_ = pso_ms_ = 0; compiles_ = psos_ = 0;
+      }
       if (presented) ++frames_presented_;
       if (frame_counter_ % 600 == 0) evict();
     }
   }
+
+  // Called from the command buffer completed handler (any thread): GPU execution time and the
+  // scheduling gap between the kernel accepting the buffer and the GPU starting it.
+  void gpu_note(double exec_ms, double queue_ms) {
+    std::lock_guard<std::mutex> lock(latency_mutex_);
+    gpu_sum_ += exec_ms; gpu_queue_sum_ += queue_ms; if (exec_ms > gpu_worst_) gpu_worst_ = exec_ms; ++gpu_count_;
+  }
+  // Called from the CAMetalDrawable presented handler (any thread).
+  void latency_note(double sim_to_panel_ms, double render_to_panel_ms) {
+    if (phase_lock_) host::present_feedback(sim_to_panel_ms, refresh_period_ms_);
+    if (!latency_log_) return;
+    std::lock_guard<std::mutex> lock(latency_mutex_);
+    latency_sum_ += sim_to_panel_ms; latency_render_sum_ += render_to_panel_ms;
+    if (sim_to_panel_ms > latency_worst_) latency_worst_ = sim_to_panel_ms;
+    if (++latency_count_ >= 60) {
+      host::log("[latency] xfb-copy -> panel %.1f ms avg (worst %.1f), commit -> panel %.1f ms avg over %u frames | gpu %.1f ms avg (worst %.1f), queue %.1f ms",
+                latency_sum_ / latency_count_, latency_worst_, latency_render_sum_ / latency_count_, latency_count_,
+                gpu_sum_ / std::max(1u, gpu_count_), gpu_worst_, gpu_queue_sum_ / std::max(1u, gpu_count_));
+      latency_sum_ = latency_render_sum_ = latency_worst_ = 0; latency_count_ = 0;
+      gpu_sum_ = gpu_queue_sum_ = gpu_worst_ = 0; gpu_count_ = 0;
+    }
+  }
+  std::mutex latency_mutex_;
+  double refresh_period_ms_ = 1000.0 / 60.0;
+  double latency_sum_ = 0, latency_render_sum_ = 0, latency_worst_ = 0; unsigned latency_count_ = 0;
+  double gpu_sum_ = 0, gpu_queue_sum_ = 0, gpu_worst_ = 0; unsigned gpu_count_ = 0;
+  const bool latency_log_ = [] { const char* e = std::getenv("MELEE_METAL_LATENCY"); return e && *e && *e != '0'; }();
+  const bool phase_lock_ = [] { const char* e = std::getenv("MELEE_PHASE_LOCK"); return e && *e && *e != '0'; }();   // experimental, MELEE_PHASE_LOCK=1 enables
 
   void evict() {
     // Drop textures unused for ten seconds; the GPU work referencing them is long complete.
@@ -878,6 +943,8 @@ class MetalBackend final : public Backend {
   int scale_ = 1, efb_w_ = EFB_WIDTH, efb_h_ = EFB_HEIGHT, slot_ = 0;
   uint64_t frame_counter_ = 0, frames_presented_ = 0, backend_id_ = (uint64_t)(uintptr_t)this;
   int shader_failures_ = 0, draws_this_frame_ = 0;
+  double compile_ms_ = 0, pso_ms_ = 0, compile_total_ms_ = 0; unsigned compiles_ = 0, psos_ = 0;
+  const bool compile_log_all_ = [] { const char* e = std::getenv("MELEE_METAL_COMPILE_LOG"); return e && *e && *e != '0'; }();
   id<MTLRenderPipelineState> bound_pipeline_ = nil;
   id<MTLDepthStencilState> bound_depth_ = nil;
   int bound_cull_ = -1;
@@ -892,14 +959,92 @@ class MetalBackend final : public Backend {
   std::vector<uint8_t> decode_scratch_;
 };
 
+
+// ---- Render thread. The simulation hands each frame to a queue and never waits on the GPU or the
+// display: nextDrawable can block for 15-30 ms when the display pipeline holds both drawables
+// (measured on a ProMotion MacBook Pro during refresh-rate changes), and on the simulation thread
+// that was a dropped game frame every time. The worker executes every frame in order (EFB copies
+// feed later frames) and presents the newest; when it falls behind it drains the backlog without
+// presenting, so a display stall costs a shown frame, never a simulated one.
+class MetalThreaded final : public Backend {
+ public:
+  explicit MetalThreaded(MetalBackend* inner) : inner_(inner) { worker_ = std::thread([this] { run(); }); }
+  ~MetalThreaded() override { queue_.finish(); if (worker_.joinable()) worker_.join(); delete inner_; }
+  void submit_frame(const Frame& frame) override { host::SimCostScope cost(host::SIM_QUEUE); if (!queue_.push(frame)) throw ExitRequested{host::exit_code()}; }
+  void submit_and_recycle(Frame& frame) override { host::SimCostScope cost(host::SIM_QUEUE); if (!queue_.push_and_recycle(frame)) throw ExitRequested{host::exit_code()}; }
+  // Control from other threads is applied by the worker between frames.
+  void resize(int w, int h) { std::lock_guard<std::mutex> lock(pending_mutex_); pending_w_ = w; pending_h_ = h; pending_resize_ = true; }
+  void set_options(const MetalOptions& o) { std::lock_guard<std::mutex> lock(pending_mutex_); pending_options_ = o; pending_options_set_ = true; }
+  void set_overlay(OverlayProvider p) { std::lock_guard<std::mutex> lock(pending_mutex_); pending_overlay_ = std::move(p); pending_overlay_set_ = true; }
+  uint64_t frames_presented() const { return frames_presented_.load(); }
+
+ private:
+  void apply_pending() {
+    std::lock_guard<std::mutex> lock(pending_mutex_);
+    if (pending_resize_) { inner_->resize(pending_w_, pending_h_); pending_resize_ = false; }
+    if (pending_options_set_) { inner_->set_options(pending_options_); pending_options_set_ = false; }
+    if (pending_overlay_set_) { inner_->set_overlay(std::move(pending_overlay_)); pending_overlay_set_ = false; }
+  }
+  void run() {
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    uint64_t drained = 0, executed = 0;
+    try {
+      Frame frame;
+      for (;;) {
+        if (!queue_.try_pop(frame)) {
+          if (queue_.drained()) break;
+          queue_.wait_available(std::chrono::milliseconds(2));
+          continue;
+        }
+        apply_pending();
+        const size_t backlog = queue_.size();
+        if (backlog > 0) {
+          inner_->set_skip_present(true); inner_->submit_frame(frame); inner_->set_skip_present(false);
+          if (++drained == 1 || drained % 300 == 0) host::log("renderer: display stalled; drained a backlog of %zu frames without presenting (%llu so far)", backlog + 1, (unsigned long long)drained);
+        } else {
+          inner_->submit_frame(frame);
+        }
+        ++executed;
+        frames_presented_.store(inner_->frames_presented());
+        queue_.recycle(std::move(frame));
+      }
+    } catch (const std::exception& e) {
+      host::log("renderer: fatal error on the render thread: %s", e.what());
+      queue_.finish(true); host::request_exit(3);
+    } catch (...) {
+      host::log("renderer: fatal error on the render thread");
+      queue_.finish(true); host::request_exit(3);
+    }
+    host::log("renderer: %llu frames executed on the render thread, %llu drained without presenting", (unsigned long long)executed, (unsigned long long)drained);
+  }
+  MetalBackend* inner_;
+  FrameQueue queue_;
+  std::thread worker_;
+  std::atomic<uint64_t> frames_presented_{0};
+  std::mutex pending_mutex_;
+  bool pending_resize_ = false, pending_options_set_ = false, pending_overlay_set_ = false;
+  int pending_w_ = 0, pending_h_ = 0;
+  MetalOptions pending_options_;
+  OverlayProvider pending_overlay_;
+};
+static std::mutex g_threaded_mutex;
+static std::unordered_map<Backend*, MetalThreaded*> g_threaded;   // backends created with a render thread
+static MetalThreaded* threaded(Backend* b) { std::lock_guard<std::mutex> lock(g_threaded_mutex); auto it = g_threaded.find(b); return it == g_threaded.end() ? nullptr : it->second; }
+
 }  // namespace
 
 Backend* create_metal_backend(void* layer, int w, int h, const MetalOptions& options) {
-  return new MetalBackend((__bridge CAMetalLayer*)layer, w, h, options);
+  MetalBackend* inner = new MetalBackend((__bridge CAMetalLayer*)layer, w, h, options);
+  const char* env = std::getenv("MELEE_RENDER_THREAD");
+  if (env && *env == '0') return inner;   // MELEE_RENDER_THREAD=0: render on the simulation thread (diagnostics)
+  MetalThreaded* t = new MetalThreaded(inner);
+  std::lock_guard<std::mutex> lock(g_threaded_mutex); g_threaded[t] = t;
+  host::log("metal: rendering on its own thread; the simulation never waits for the display");
+  return t;
 }
-void metal_resize(Backend* backend, int w, int h) { static_cast<MetalBackend*>(backend)->resize(w, h); }
-void metal_set_options(Backend* backend, const MetalOptions& options) { static_cast<MetalBackend*>(backend)->set_options(options); }
-uint64_t metal_frames_presented(Backend* backend) { return static_cast<MetalBackend*>(backend)->frames_presented(); }
-void metal_set_overlay(Backend* backend, OverlayProvider provider) { static_cast<MetalBackend*>(backend)->set_overlay(std::move(provider)); }
+void metal_resize(Backend* backend, int w, int h) { if (MetalThreaded* t = threaded(backend)) t->resize(w, h); else static_cast<MetalBackend*>(backend)->resize(w, h); }
+void metal_set_options(Backend* backend, const MetalOptions& options) { if (MetalThreaded* t = threaded(backend)) t->set_options(options); else static_cast<MetalBackend*>(backend)->set_options(options); }
+uint64_t metal_frames_presented(Backend* backend) { if (MetalThreaded* t = threaded(backend)) return t->frames_presented(); return static_cast<MetalBackend*>(backend)->frames_presented(); }
+void metal_set_overlay(Backend* backend, OverlayProvider provider) { if (MetalThreaded* t = threaded(backend)) t->set_overlay(std::move(provider)); else static_cast<MetalBackend*>(backend)->set_overlay(std::move(provider)); }
 
 }  // namespace gx

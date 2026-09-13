@@ -50,6 +50,7 @@ void usage() {
       "  --volume 0-100           output volume (default 70)\n"
       "  --window WxH             initial window size (default 1280x960)\n"
       "  --no-vsync               present without vertical sync\n"
+      "  --fullscreen             start in full screen (macOS: direct-to-display presentation)\n"
       "  --scale N|auto           internal resolution multiplier (default auto)\n"
       "  --widescreen             Slippi 16:9 code and 16:9 presentation\n"
       "  --sharpness 0..1         contrast-adaptive sharpening\n"
@@ -136,7 +137,7 @@ int main(int argc, char** argv) {
   uint32_t window_w = 1280, window_h = 960;
   gx::MetalOptions gfx;
   std::string script, iso_arg, user_dir, sys_dir, replay_dir, card_dir, profile_dir, cache_dir, log_file;
-  bool offline = false, choose_disc = false;
+  bool offline = false, choose_disc = false, fullscreen_arg = false;
   float overlay_opacity_arg = -1.0f, sharpness_arg = -1.0f;
   bool widescreen_arg = false;
   for (int i = 1; i < argc; ++i) {
@@ -149,6 +150,7 @@ int main(int argc, char** argv) {
     else if (a == "--volume") volume = std::atoi(next());
     else if (a == "--window") { if (std::sscanf(next(), "%ux%u", &window_w, &window_h) != 2 || window_w < 320 || window_h < 240) { usage(); return 2; } }
     else if (a == "--no-vsync") gfx.vsync = false;
+    else if (a == "--fullscreen") fullscreen_arg = true;
     else if (a == "--scale") { std::string v = next(); gfx.efb_scale = v == "auto" ? 0 : std::atoi(v.c_str()); if (v != "auto" && gfx.efb_scale < 1) { usage(); return 2; } }
     else if (a == "--widescreen") widescreen_arg = true;
     else if (a == "--sharpness") sharpness_arg = std::clamp((float)std::atof(next()), 0.0f, 1.0f);
@@ -308,6 +310,7 @@ int main(int argc, char** argv) {
 
   host::log("iSlippi %s: Apple Metal frontend", MELEE_PORT_VERSION);
   host::log("paths: iso=%s sys=%s profile=%s replays=%s cache=%s", o.iso.c_str(), o.sys_dir.c_str(), profile_dir.c_str(), replay_dir.c_str(), cache_dir.c_str());
+  host::simulation_thread_realtime();   // Mach time-constraint policy: a 16.7 ms period the scheduler must honour (MELEE_REALTIME=0 disables)
   host::log("slippi: %s%s", offline ? "offline" : "online services enabled, user dir ", offline ? "" : online.user_dir.c_str());
   host::log("execution: %s, fp_profile=%s", allow_interpreter ? "interpreter fallback allowed" : "strict AOT", ppc::fp_profile_name(ppc::fp_profile()));
   if (!host::disc_open(o.iso)) {
@@ -328,7 +331,7 @@ int main(int argc, char** argv) {
     backend = gx::create_metal_backend(layer, client_w, client_h, gfx);
     host::log("display: %.0f Hz refresh; the game simulates at 60 Hz and each frame is shown on the next refresh slot", host::window_refresh_rate());
     host::window_set_resize_callback([backend](int w, int h) { gx::metal_resize(backend, w, h); });
-    if (settings.fullscreen) host::window_set_fullscreen(true);
+    if (settings.fullscreen || fullscreen_arg) host::window_set_fullscreen(true);
     gx::metal_set_overlay(backend, host::touch_overlay);
     host::g_has_window = true;
     gx::init(backend);

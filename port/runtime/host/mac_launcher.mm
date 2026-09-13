@@ -469,7 +469,7 @@ int display_max_hz(NSScreen* screen) {
   self.vsyncSwitch = [self toggle:self.settings->vsync];
   [s addArrangedSubview:[self row:@"Display sync (off = lowest latency, may tear)" symbol:@"waveform.path" control:self.vsyncSwitch]];
   self.fullscreenSwitch = [self toggle:self.settings->fullscreen];
-  [s addArrangedSubview:[self row:@"Start full screen" symbol:@"arrow.up.left.and.arrow.down.right" control:self.fullscreenSwitch]];
+  [s addArrangedSubview:[self row:@"Start full screen (lowest latency; ⌥⏎ toggles)" symbol:@"arrow.up.left.and.arrow.down.right" control:self.fullscreenSwitch]];
   self.widescreenSwitch = [self toggle:self.settings->widescreen];
   [s addArrangedSubview:[self row:@"Widescreen (16:9)" symbol:@"rectangle.ratio.16.to.9" control:self.widescreenSwitch]];
   self.sharpness = [NSSlider sliderWithValue:self.settings->sharpness minValue:0 maxValue:1 target:nil action:nil];

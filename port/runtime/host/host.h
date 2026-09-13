@@ -90,7 +90,7 @@ void close_state_trace();
 bool state_trace_output_ok();
 
 // ---- simulation-thread cost accounting (per retrace; logged when a frame exceeds 20 ms) ----
-enum SimCost { SIM_DVD, SIM_AX, SIM_JUKEBOX, SIM_EXI, SIM_SNAPSHOT, SIM_QUEUE, SIM_OBSERVE, SIM_COST_COUNT };
+enum SimCost { SIM_DVD, SIM_AX, SIM_JUKEBOX, SIM_EXI, SIM_SNAPSHOT, SIM_QUEUE, SIM_OBSERVE, SIM_RENDER, SIM_TEXTURE, SIM_PUMP, SIM_GPUWAIT, SIM_DRAWABLE, SIM_COST_COUNT };
 void sim_cost_add(int slot, double seconds);
 double last_sim_frame_ms();            // work time of the most recent simulation frame (sleep excluded)
 
@@ -104,6 +104,17 @@ double emulation_speed();
 // Host steady-clock seconds of the current simulation frame's retrace (the scheduled deadline when
 // paced, wall time when --fast). Sub-frame presentation measures its phase from this.
 double frame_time();
+// Display phase lock. The renderer reports, per presented frame, how long the XFB copy took
+// to reach the panel; the retrace grid then drifts (at most 0.25 ms per frame, the 60 Hz
+// average is untouched) so frames are finished just before a refresh instead of at a random
+// phase, which removes most of the wait-for-vblank latency. Reporting the display period
+// lets the lock recognise a wrap (a frame that missed its refresh by a hair).
+void present_feedback(double latency_ms, double display_period_ms);
+double phase_lock_total_ms();
+// Asks the kernel for real-time scheduling of the calling (simulation) thread: a 60 Hz period with
+// a few milliseconds of guaranteed computation, so background work on the machine cannot push a
+// frame past its deadline. Apple platforms only; a no-op elsewhere.
+void simulation_thread_realtime();
 double now_seconds();
 struct SimCostScope { int slot; double t0; explicit SimCostScope(int s) : slot(s), t0(now_seconds()) {} ~SimCostScope() { sim_cost_add(slot, now_seconds() - t0); } };
 
