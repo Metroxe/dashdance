@@ -4,6 +4,7 @@ Usage: python recomp.py [--out DIR] [--dol PATH] [--hle hle_list.txt] [--tu-insn
 Generated code is not committed (see .gitignore); rerun after changing the emitter.
 """
 import argparse
+from dataclasses import dataclass
 import hashlib
 import re
 import sys
@@ -19,6 +20,56 @@ import gecko
 
 ROOT = Path(__file__).resolve().parents[2]
 SLIPPI_SYS = ROOT / "port/slippi_sys"   # Slippi's Sys files (GPL-2.0, from the Slippi Ishiiruka repo), vendored so a clone builds
+
+
+@dataclass(frozen=True)
+class AbsorbedHook:
+    hle_name: str
+    payload_sha256: str
+
+
+# HLE implementations may absorb a Gecko hook only when the canonical payload
+# is exactly the audited implementation. Any source drift fails generation.
+ABSORBED_HOOKS = {
+    0x8034DED8: AbsorbedHook(
+        "PADControlMotor",
+        "1e20989f0e6841111dad179f7086e15365907dc8ce8a96b19d231007bae7a5e0",
+    ),
+}
+
+
+def validate_absorbed_hooks(hooks, symbols, hle_funcs,
+                            registrations=ABSORBED_HOOKS):
+    validated = set()
+    for hook in hooks:
+        owner = symbols.containing(hook.hook)
+        if owner is None or owner.name not in hle_funcs:
+            continue
+        registration = registrations.get(hook.hook)
+        if registration is None:
+            raise ValueError(
+                "Gecko hook at %08X lands in HLE'd %s but is not registered "
+                "as absorbed" % (hook.hook, owner.name)
+            )
+        if registration.hle_name != owner.name:
+            raise ValueError(
+                "absorbed Gecko hook at %08X is registered for %s, not %s" %
+                (hook.hook, registration.hle_name, owner.name)
+            )
+        fingerprint = gecko.hook_fingerprint(hook)
+        if fingerprint != registration.payload_sha256:
+            raise ValueError(
+                "absorbed Gecko hook at %08X fingerprint drift: %s != %s" %
+                (hook.hook, fingerprint, registration.payload_sha256)
+            )
+        hook.absorbed_by = owner.name
+        validated.add(hook.hook)
+    missing = sorted(set(registrations) - validated)
+    if missing:
+        raise ValueError(
+            "registered absorbed Gecko hook(s) absent or not HLE-owned: %s" %
+            ", ".join("%08X" % address for address in missing)
+        )
 
 
 class GeckoSet:
@@ -74,13 +125,15 @@ class GeckoSet:
                     text_writes += 1
                 else:
                     data_writes += 1
-        seen = {}
+        all_hooks = []
         for p in [self.boot, self.main] + ([self.extra] if self.extra else []):
-            for h in p.hooks:
-                if h.hook in seen:
-                    print("warning: two Gecko hooks at %08X; the later table wins" % h.hook)
-                seen[h.hook] = h
-        self.hooks = list(seen.values())
+            all_hooks.extend(p.hooks)
+        self.hooks, duplicates = gecko.canonicalize_hooks(all_hooks)
+        for address, identical in duplicates:
+            if identical:
+                print("info: identical Gecko hooks at %08X; canonical later table wins" % address)
+            else:
+                print("warning: different Gecko hooks at %08X; the later table wins" % address)
         if self.gct_base:
             self.caves = list(self.main.c0) + list(self.boot.c0) + (list(self.extra.c0) if self.extra else [])
         return text_writes, data_writes
@@ -177,21 +230,31 @@ def main():
             ", ".join(gs.optional_flags) or "none", len(gs.optional_text), sum(1 for h in gs.hooks if h.optional), len(gs.optional_data), gs.optional_offset))
         for idx, a, b in (gs.boot.unsupported + gs.main.unsupported)[:10]:
             print("  unsupported Gecko line %d: %08X %08X" % (idx, a, b))
-    infos, extra, thunks = analyze_all(dol, symbols, gs)
     hle = set()
-    for line in open(args.hle, encoding="utf-8"):
-        line = line.split("#", 1)[0].strip()
-        if line:
-            hle.add(line)
+    with open(args.hle, encoding="utf-8") as hle_source:
+        for line in hle_source:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                hle.add(line)
     missing = sorted(n for n in hle if n not in symbols.by_name)
     if missing:
         print("warning: HLE names not in symbol map:", ", ".join(missing))
     hle_funcs = {n for n in hle if n in symbols.by_name}
     if gs is not None:
+        try:
+            validate_absorbed_hooks(gs.hooks, symbols, hle_funcs)
+        except ValueError as error:
+            ap.error(str(error))
+    infos, extra, thunks = analyze_all(dol, symbols, gs)
+    if gs is not None:
         for h in gs.hooks:
+            if h.absorbed_by is not None:
+                print("slippi: Gecko hook at %08X absorbed by HLE'd %s (%s)" %
+                      (h.hook, h.absorbed_by, gecko.hook_fingerprint(h)))
+                continue
             owner = symbols.containing(h.hook)
             if owner is not None and owner.name in hle_funcs:
-                print("warning: Gecko hook at %08X lands in HLE'd %s; the cave will not run" % (h.hook, owner.name))
+                raise AssertionError("unvalidated HLE/Gecko overlap")
         Path(args.out).mkdir(parents=True, exist_ok=True)
         write_gecko_data(Path(args.out), gs)
 
@@ -254,7 +317,7 @@ def main():
             return
         path = out / ("guest_%03d.cpp" % tu_index)
         body = ("// Generated by port/recomp/recomp.py from main.dol. Do not edit.\n"
-                "#include \"functions.h\"\n#include \"gecko_data.h\"\n#include <intrin.h>\nnamespace guest {\n" + "".join(chunk) + "}\n")
+                "#include \"functions.h\"\n#include \"gecko_data.h\"\nnamespace guest {\n" + "".join(chunk) + "}\n")
         if "gx::RenderObserver" in body:
             body = '#include "render_observer.h"\n' + body
         changed += write_if_changed(path, body)

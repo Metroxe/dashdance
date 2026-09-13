@@ -1,6 +1,7 @@
 // PAD HLE: controller state from the host input layer.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "hle.h"
+#include "pad_rumble.h"
 #include <cstring>
 
 static uint32_t s_spec = 5;
@@ -9,7 +10,14 @@ HLE(PADInit) { RET(1); }
 HLE(PADReset) { RET(1); }
 HLE(PADRecalibrate) { RET(1); }
 // PADControlMotor(chan, command): 0 stop, 1 rumble, 2 stop hard.
-HLE(PADControlMotor) { host::gcadapter_rumble((int)ARG0, ARG1 == 1); }
+HLE(PADControlMotor) {
+  const auto decision = pad::decide_rumble(
+      ARG0, ARG1, host::rd8(0x80479D30), host::rd8(0x80479D33), c.r[13],
+      host::ram, ppc::RAM_SIZE);
+  if (decision.deliver) {
+    host::gcadapter_rumble(decision.physical_port, decision.on);
+  }
+}
 HLE(PADControlAllMotors) { for (int i = 0; i < 4; ++i) host::gcadapter_rumble(i, host::rd32(ARG0 + 4 * i) == 1); }
 HLE(PADSetSpec) { s_spec = ARG0; }
 HLE(PADGetSpec) { RET(s_spec); }

@@ -4,6 +4,32 @@
 // in a match, and capture/load savestates around rollbacks.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "slippi_online.h"
+#include "slippi_offline.h"
+
+#if defined(MELEE_PORT_OFFLINE) && MELEE_PORT_OFFLINE
+// The diagnostic target deliberately does not link identity, HTTP, ENet or
+// reporting implementations. Asking it to enable online cannot load a profile.
+namespace slippi::online {
+namespace {
+Config g_config;
+bool g_initialized = false;
+}
+Config& config() { return g_config; }
+bool available() { return false; }
+void init() {
+  if (g_initialized) return;
+  offline::reset(g_config);
+  g_initialized = true;
+}
+void shutdown() { g_initialized = false; }
+uint64_t rollback_count() { return 0; }
+bool is_online_match() { return false; }
+bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vector<uint8_t>& q) {
+  if (!g_initialized) init();
+  return offline::handle(cmd, payload, payload_len, q);
+}
+}  // namespace slippi::online
+#else
 #include "slippi_net.h"
 #include "slippi_report.h"
 #include "exi_slippi.h"
@@ -25,6 +51,10 @@ namespace slippi::online {
 namespace {
 
 Config g_config;
+bool g_initialized = false;
+// Local two-instance peering is a test harness: never report those games or fetch ranks for them.
+static bool reporting_enabled() { return !Matchmaking::local_peer.enabled; }
+bool g_offline = true;
 
 enum Cmd : uint8_t {
   CMD_ONLINE_INPUTS = 0xB0, CMD_CAPTURE_SAVESTATE = 0xB1, CMD_LOAD_SAVESTATE = 0xB2, CMD_GET_MATCH_STATE = 0xB3, CMD_FIND_OPPONENT = 0xB4,
@@ -187,7 +217,7 @@ void handle_poor_match_performance(int32_t frame) {
   g_perf_debt = std::max(0, g_perf_debt + std::max(speed_debt, ping_debt));
   if (g_perf_debt >= 30) {
     host::log("slippi: match terminated due to poor performance (%d)", g_perf_debt);
-    { UserInfo me = g_user->GetUserInfo(); report::match_status(me.uid, me.play_key, g_recent_mm_result.id, "poor_performance", true); }
+    { UserInfo me = g_user->GetUserInfo(); if (reporting_enabled()) report::match_status(me.uid, me.play_key, g_recent_mm_result.id, "poor_performance", true); }
     g_netplay->ForceDisconnect(NetplayClient::DisconnectReason::POOR_PERFORMANCE);
   }
 }
@@ -731,7 +761,7 @@ void handle_report_game(const uint8_t* p) {
       pr.starting_stocks = info_block[0x62 + 0x24 * i]; pr.starting_percent = be16(info_block + 0x70 + 0x24 * i);
       r.players.push_back(pr);
     }
-    report::log_game(r);
+    if (reporting_enabled()) report::log_game(r);
   }
   if (mode == Matchmaking::RANKED && end_method == 7 && g_netplay) {
     SyncedGameState s;
@@ -761,24 +791,24 @@ void handle_get_player_settings(std::vector<uint8_t>& q) {
 }  // namespace
 
 Config& config() { return g_config; }
+bool available() { return true; }
 uint64_t rollback_count() { return g_rollbacks; }
 bool is_online_match() { return g_in_online_match; }
 
-static bool file_exists(const std::string& p) { FILE* f = std::fopen(p.c_str(), "rb"); if (!f) return false; std::fclose(f); return true; }
-
 void init() {
-  report::init(host::options.iso, g_config.user_dir);
-  // Without a user.json in the configured folder, use the Slippi Launcher's own login so a fresh
-  // install of the port shares the account the user already signed into.
-  if (!file_exists(g_config.user_dir + "/user.json")) {
-    const char* appdata = std::getenv("APPDATA");
-    if (appdata) {
-      std::string launcher = std::string(appdata) + "/Slippi Launcher/netplay/User/Slippi";
-      if (file_exists(launcher + "/user.json")) { host::log("slippi: using the Slippi Launcher login at %s", launcher.c_str()); g_config.user_dir = launcher; }
-    }
+  if (g_initialized) return;
+  g_initialized = true;
+  g_offline = g_config.offline;
+  if (g_offline) {
+    offline::reset(g_config);
+    host::log("slippi: offline services (identity, matchmaking and reporting disabled)");
+    return;
   }
+  report::init(host::options.iso, g_config.user_dir);
+  // Only the caller-owned directory is used. Never discover another installed
+  // client's login or silently replace the configured profile on any platform.
   g_user = std::make_unique<User>(g_config.user_dir);
-  if (g_user->IsLoggedIn()) report::fetch_user_rank(g_user->GetUserInfo().uid);
+  if (g_user->IsLoggedIn()) if (reporting_enabled()) report::fetch_user_rank(g_user->GetUserInfo().uid);
   g_matchmaking = std::make_unique<Matchmaking>(g_user.get());
   g_direct_codes = std::make_unique<DirectCodes>(g_config.user_dir + "/direct-codes.json");
   g_teams_codes = std::make_unique<DirectCodes>(g_config.user_dir + "/teams-codes.json");
@@ -788,9 +818,12 @@ void init() {
 }
 
 void shutdown() {
+  if (!g_initialized) return;
+  g_initialized = false;
+  if (g_offline) return;
   // Leaving during a ranked game counts as abandoning it (same as Dolphin).
   if (g_in_online_match && g_recent_mm_result.id.find("mode.ranked") != std::string::npos && g_user) {
-    UserInfo me = g_user->GetUserInfo(); report::match_status(me.uid, me.play_key, g_recent_mm_result.id, "abandoned", false);
+    UserInfo me = g_user->GetUserInfo(); if (reporting_enabled()) report::match_status(me.uid, me.play_key, g_recent_mm_result.id, "abandoned", false);
   }
   report::shutdown();
   if (g_matchmaking) {
@@ -801,10 +834,15 @@ void shutdown() {
   g_matchmaking.reset();
   g_active_savestates.clear();
   g_available_savestates.clear();
+  g_user.reset();
+  g_direct_codes.reset();
+  g_teams_codes.reset();
+  g_in_online_match = false;
 }
 
 bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vector<uint8_t>& q) {
-  if (!g_user) init();
+  if (!g_initialized) init();
+  if (g_offline) return offline::handle(cmd, payload, payload_len, q);
   switch (cmd) {
     case CMD_ONLINE_INPUTS: handle_online_inputs(payload, q); return true;
     case CMD_CAPTURE_SAVESTATE: handle_capture_savestate(payload); return true;
@@ -855,7 +893,7 @@ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vect
       host::log("slippi: set complete (end mode %u)", payload[0]);
       if (g_recent_mm_result.id.find("mode.ranked") != std::string::npos) {
         UserInfo me = g_user->GetUserInfo();
-        report::match_status(me.uid, me.play_key, g_recent_mm_result.id, payload[0] == 0 ? "normal_completion" : "abnormal_completion", true);
+        if (reporting_enabled()) report::match_status(me.uid, me.play_key, g_recent_mm_result.id, payload[0] == 0 ? "normal_completion" : "abnormal_completion", true);
       }
       return true;
     }
@@ -868,7 +906,7 @@ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vect
       auto it = status_names.find(payload[0]);
       if (it == status_names.end()) { host::log("slippi: invalid match status index %u", payload[0]); return true; }
       UserInfo me = g_user->GetUserInfo();
-      report::match_status(me.uid, me.play_key, g_recent_mm_result.id, it->second, true);
+      if (reporting_enabled()) report::match_status(me.uid, me.play_key, g_recent_mm_result.id, it->second, true);
       return true;
     }
     case CMD_GET_PLAYER_SETTINGS: handle_get_player_settings(q); return true;
@@ -884,10 +922,11 @@ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vect
       append_u32(q, ord); append_u32(q, ri.rating_update_count); append_u32(q, chg); q.push_back((uint8_t)ri.rank_change);
       return true;
     }
-    case CMD_FETCH_RANK: { UserInfo me = g_user->GetUserInfo(); report::fetch_match_result(g_recent_mm_result.id, me.uid, me.play_key); return true; }
+    case CMD_FETCH_RANK: { UserInfo me = g_user->GetUserInfo(); if (reporting_enabled()) report::fetch_match_result(g_recent_mm_result.id, me.uid, me.play_key); return true; }
     case CMD_GET_RANK_VISIBILITY: q.clear(); q.push_back((uint8_t)((g_config.show_local_rank ? 1 : 0) | (g_config.show_opponent_rank ? 2 : 0))); return true;
     default: return false;
   }
 }
 
 }  // namespace slippi::online
+#endif

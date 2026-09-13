@@ -145,6 +145,7 @@ uint32_t decode_vertices(const VertexDesc& d, const uint8_t* src, uint32_t count
     if (d.nrm.type) {
       uint32_t cb = comp_bytes(d.nrm.format), frac = d.nrm.format == 1 ? 6 : d.nrm.format == 3 ? 14 : d.nrm.format == 0 ? 7 : d.nrm.format == 2 ? 15 : 0;
       uint32_t nvec = d.nrm.count ? 3 : 1;
+      if (nvec > 1) components |= VB_UNCAPTURED_NBT;
       const uint8_t* q = nullptr;
       if (d.nrm.type == 1) { q = p; p += cb * 3 * nvec; }
       else if (d.nrm.type == 2) { q = array_ptr(1, *p); p += (d.nrm.count && d.nrm_index3) ? 3 : 1; }
@@ -297,6 +298,7 @@ void bp_write(uint32_t value) {
     }
     case BP_TRIGGER_EFB_COPY: {
       EfbCopy c{};
+      capture_copy_state(c, g_bp);
       c.dest_addr = g_bp.reg[BP_EFB_ADDR] << 5;
       c.dest_stride = g_bp.reg[BP_MIPMAP_STRIDE] << 5;
       uint32_t tl = g_bp.reg[BP_EFB_TL], br = g_bp.reg[BP_EFB_BR];
@@ -317,6 +319,12 @@ void bp_write(uint32_t value) {
       c.clear_z = g_bp.reg[BP_CLEAR_Z] & 0xFFFFFF;
       uint32_t yscale = g_bp.reg[BP_COPYYSCALE];
       c.y_scale = bits(masked, 10, 1) ? 256.0f / (float)yscale : (float)yscale / 256.0f;
+      if (!c.to_xfb && !c.is_depth && c.format == 6 && !c.half_scale) {
+        const uint64_t size = uint64_t(c.dest_stride) * ((c.src_h + 3) / 4);
+        const uint32_t offset = c.dest_addr & 0x3fffffffu;
+        if (offset < ppc::RAM_SIZE && size <= ppc::RAM_SIZE - offset)
+          c.destination_before_copy.assign(host::ram + offset, host::ram + offset + size);
+      }
       g_frame.copies.push_back(c);
       g_frame.commands.push_back({FrameCommand::Copy, (uint32_t)g_frame.copies.size() - 1});
       ++g_efb_copies;

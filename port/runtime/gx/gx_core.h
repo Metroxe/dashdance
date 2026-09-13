@@ -32,6 +32,9 @@ enum : uint32_t {
   VB_HAS_NRM0 = 1u << 10, VB_HAS_NRM1 = 1u << 11, VB_HAS_NRM2 = 1u << 12,
   VB_HAS_COL0 = 1u << 13, VB_HAS_COL1 = 1u << 14,
   VB_HAS_UV0 = 1u << 15,         // ..7 -> bits 15..22
+  // The decoder consumed NBT data but Vertex currently stores only the normal.
+  // This is a coverage gap, not a claim that binormal/tangent attributes exist.
+  VB_UNCAPTURED_NBT = 1u << 31,
 };
 
 // Snapshot of everything a draw needs; the backend replays these.
@@ -93,7 +96,27 @@ struct EfbCopy {
   bool to_xfb, clear, intensity, half_scale, is_depth;
   uint32_t clear_color, clear_z;  // ARGB, 24-bit z
   float y_scale;
+  // Copy-time state can change after the preceding draw. Older/synthetic captures
+  // must opt in explicitly; a renderer must not infer these masks from a draw.
+  uint32_t zmode = 0, blendmode = 0, dstalpha = 0, zcontrol = 0;
+  uint32_t filter0 = 0, filter1 = 0, copy_control = 0, genmode = 0;
+  // The GPU copy does not update guest RAM. Comparing later source snapshots
+  // against these copy-time bytes detects CPU writes even before first sample.
+  std::vector<uint8_t> destination_before_copy;
+  bool has_copy_state = false;
 };
+
+inline void capture_copy_state(EfbCopy& copy, const BPMemory& bp) {
+  copy.zmode = bp.zmode();
+  copy.blendmode = bp.blendmode();
+  copy.dstalpha = bp.dstalpha();
+  copy.zcontrol = bp.zcontrol();
+  copy.filter0 = bp.reg[BP_COPYFILTER0];
+  copy.filter1 = bp.reg[BP_COPYFILTER0 + 1];
+  copy.copy_control = bp.reg[BP_TRIGGER_EFB_COPY];
+  copy.genmode = bp.reg[BP_GENMODE];
+  copy.has_copy_state = true;
+}
 
 struct FrameCommand {
   enum Kind { Draw, Copy } kind;

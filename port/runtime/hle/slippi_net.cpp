@@ -2,11 +2,15 @@
 // SlippiNetplayClient, SlippiMatchmaking and the user record.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "slippi_net.h"
+#if !defined(MELEE_PORT_OFFLINE) || !MELEE_PORT_OFFLINE
 #include "host.h"
+#if defined(_WIN32)
 #define NOMINMAX
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <windows.h>
+#else
+#include <arpa/inet.h>
+#endif
 #include <enet/enet.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -26,74 +30,6 @@ const char* const SLIPPI_SEMVER = "3.6.4";
 
 uint64_t time_us() { return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 uint64_t time_ms() { return time_us() / 1000; }
-
-// ---------------------------------------------------------------- strings
-static std::wstring utf8_to_wide(const std::string& s) {
-  if (s.empty()) return {};
-  int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
-  std::wstring w(n, 0);
-  MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
-  return w;
-}
-static std::string wide_to_cp(const std::wstring& w, UINT cp) {
-  if (w.empty()) return {};
-  int n = WideCharToMultiByte(cp, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
-  std::string s(n, 0);
-  WideCharToMultiByte(cp, 0, w.data(), (int)w.size(), &s[0], n, nullptr, nullptr);
-  return s;
-}
-std::string utf8_to_shiftjis(const std::string& s) { return wide_to_cp(utf8_to_wide(s), 932); }
-std::string shiftjis_to_utf8(const std::string& s) {
-  if (s.empty()) return {};
-  int n = MultiByteToWideChar(932, 0, s.data(), (int)s.size(), nullptr, 0);
-  std::wstring w(n, 0);
-  MultiByteToWideChar(932, 0, s.data(), (int)s.size(), &w[0], n);
-  return wide_to_cp(w, CP_UTF8);
-}
-std::string truncate_length_char(const std::string& input, int length) {
-  // Count code points, not bytes (UTF8ToUTF32 / resize / UTF32toUTF8 in Dolphin).
-  std::string out;
-  int count = 0;
-  for (size_t i = 0; i < input.size() && count < length; ) {
-    unsigned char c = (unsigned char)input[i];
-    size_t len = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : 4;
-    out.append(input, i, len);
-    i += len; ++count;
-  }
-  return out;
-}
-static void convert_narrow_special_shiftjis(std::string& input) {
-  static const std::unordered_map<char, uint16_t> table = {
-      {'!', 0x8149}, {'"', 0x8168}, {'#', 0x8194}, {'$', 0x8190}, {'%', 0x8193}, {'&', 0x8195}, {'\'', 0x8166}, {'(', 0x8169},
-      {')', 0x816a}, {'*', 0x8196}, {'+', 0x817b}, {',', 0x8143}, {'-', 0x817c}, {'.', 0x8144}, {'/', 0x815e}, {':', 0x8146},
-      {';', 0x8147}, {'<', 0x8183}, {'=', 0x8181}, {'>', 0x8184}, {'?', 0x8148}, {'@', 0x8197}, {'[', 0x816d}, {'\\', 0x815f},
-      {']', 0x816e}, {'^', 0x814f}, {'_', 0x8151}, {'`', 0x814d}, {'{', 0x816f}, {'|', 0x8162}, {'}', 0x8170}, {'~', 0x8160},
-  };
-  size_t pos = 0;
-  while (pos < input.size()) {
-    char c = input[pos];
-    if ((unsigned char)c & 0x80) { pos += 2; continue; }
-    auto it = table.find(c);
-    if (it == table.end()) { ++pos; continue; }
-    input.erase(pos, 1);
-    // Dolphin inserts the little-endian bytes of the char16 in reverse, which yields big-endian order.
-    input.insert(input.begin() + pos, (char)(it->second & 0xFF));
-    input.insert(input.begin() + pos, (char)(it->second >> 8));
-    pos += 2;
-  }
-}
-std::string convert_string_for_game(const std::string& input, int length) {
-  std::string sj = utf8_to_shiftjis(truncate_length_char(input, length));
-  convert_narrow_special_shiftjis(sj);
-  sj.resize(length * 2 + 1);
-  return sj;
-}
-std::string convert_connect_code_for_game(const std::string& input) {
-  std::string code;
-  for (char c : input) { if (c == '#') { code += (char)0x81; code += (char)0x94; } else code += c; }
-  code.resize(8 + 2);
-  return code;
-}
 
 // ---------------------------------------------------------------- ENet
 static bool g_enet_ready = false;
@@ -202,8 +138,14 @@ void DirectCodes::AddOrUpdateCode(const std::string& code) {
 
 // ---------------------------------------------------------------- netplay client
 NetplayClient::NetplayClient(std::vector<std::string> addrs, std::vector<uint16_t> ports, uint8_t remote_player_count, uint16_t local_port,
-                             bool is_decider, uint8_t player_idx) {
+                             bool is_decider, uint8_t player_idx, const std::string& bind_address) {
   host::log("slippi: netplay client: local port %u, decider %d, player index %u, %u remote players", local_port, is_decider, player_idx, remote_player_count);
+  if (remote_player_count == 0 || remote_player_count > REMOTE_PLAYER_MAX ||
+      player_idx >= PLAYER_COUNT_MAX || addrs.size() != remote_player_count || ports.size() != remote_player_count) {
+    host::log("slippi: invalid netplay peer configuration");
+    status_.store(ConnectStatus::FAILED);
+    return;
+  }
   is_decider_ = is_decider;
   remote_player_count_ = remote_player_count;
   player_idx_ = player_idx;
@@ -213,18 +155,40 @@ NetplayClient::NetplayClient(std::vector<std::string> addrs, std::vector<uint16_
     match_info_.remote[i].player_idx = (uint8_t)j;
     last_frame_acked_[i] = 0;
   }
-  ENetAddress local_addr;
+  ENetAddress local_addr{};
   ENetAddress* local = nullptr;
-  if (local_port > 0) { local_addr.host = ENET_HOST_ANY; local_addr.port = local_port; local = &local_addr; }
+  if (local_port > 0 || !bind_address.empty()) {
+    local_addr.host = ENET_HOST_ANY;
+    local_addr.port = local_port;
+    // A numeric local bind address supports confined loopback validation without
+    // DNS, a launcher profile, a matchmaker or a production-facing listener.
+    if (!bind_address.empty()) {
+      in_addr bind_ip{};
+      if (inet_pton(AF_INET, bind_address.c_str(), &bind_ip) != 1) {
+        host::log("slippi: invalid local bind address");
+        status_.store(ConnectStatus::FAILED);
+        return;
+      }
+      local_addr.host = bind_ip.s_addr;
+    }
+    local = &local_addr;
+  }
   client_ = enet_host_create(local, 10, 3, 0, 0);
   if (!client_) { host::log("slippi: cannot create ENet client"); status_.store(ConnectStatus::FAILED); return; }
   for (int i = 0; i < remote_player_count; ++i) {
-    ENetAddress addr;
-    enet_address_set_host(&addr, addrs[i].c_str());
+    ENetAddress addr{};
+    in_addr peer_ip{};
+    const bool numeric = inet_pton(AF_INET, addrs[i].c_str(), &peer_ip) == 1;
+    if (numeric) addr.host = peer_ip.s_addr;
+    else if (enet_address_set_host(&addr, addrs[i].c_str()) < 0) {
+      host::log("slippi: cannot resolve configured peer address");
+      status_.store(ConnectStatus::FAILED);
+      return;
+    }
     addr.port = ports[i];
     ENetPeer* peer = enet_host_connect(client_, &addr, 3, 0);
+    if (!peer) { host::log("slippi: cannot create configured peer"); status_.store(ConnectStatus::FAILED); return; }
     server_.push_back(peer);
-    if (!peer) { host::log("slippi: cannot create peer for %s:%u", addrs[i].c_str(), ports[i]); continue; }
     ActiveConnectionInfo info;
     info.player_idx = match_info_.remote[i].player_idx;
     active_connections_[peer_key(peer)][peer] = info;
@@ -791,8 +755,8 @@ static std::string local_address_string(ENetAddress* mm_address) {
   std::string out;
   if (enet_socket_connect(s, mm_address) != -1 && enet_socket_get_address(s, &a) != -1) {
     struct in_addr in; in.s_addr = a.host;
-    char buf[32]; inet_ntop(AF_INET, &in, buf, sizeof buf);
-    out = buf;
+    char buf[INET_ADDRSTRLEN]{};
+    if (inet_ntop(AF_INET, &in, buf, sizeof buf)) out = buf;
   }
   enet_socket_destroy(s);
   return out;
@@ -1011,3 +975,4 @@ int Matchmaking::GetPlayerRank(uint8_t port) const {
 }
 
 }  // namespace slippi
+#endif  // online transport is deliberately absent from the diagnostic target

@@ -278,6 +278,8 @@ def analyze_all(dol, symbols, gecko=None):
     synthetic = []   # (Function, body sequence)
     if gecko is not None:
         for h in gecko.hooks:
+            if getattr(h, "absorbed_by", None) is not None:
+                continue
             owner = symbols.containing(h.hook)
             if owner is not None and dol.in_text(owner.addr):
                 hooks[h.hook] = h
@@ -296,7 +298,9 @@ def analyze_all(dol, symbols, gecko=None):
         # address with `bl x; x: blrl` to hand callbacks around. Every such in-cave target is an
         # entry reached through the dispatch table, so the cave tail from that address becomes a
         # function of its own (it returns with blr long before the cave's branch-back).
-        cave_list = [(h.cave_addr, h.words) for h in gecko.hooks] + [(c.cave_addr, c.words) for c in gecko.caves]
+        cave_list = [(h.cave_addr, h.words) for h in gecko.hooks
+                     if getattr(h, "absorbed_by", None) is None]
+        cave_list += [(c.cave_addr, c.words) for c in gecko.caves]
         cave_list.sort()
         starts = [s for s, _ in cave_list]
         import bisect

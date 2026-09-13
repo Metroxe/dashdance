@@ -3,15 +3,18 @@
 #include "jukebox.h"
 #include "slippi_playback.h"
 #include "slippi_online.h"
+#include "slippi_game_file.h"
 #include "gecko_data.h"
 #include "host.h"
+#include "fatal_boundary.h"
+#include "sha256.h"
+#include "window.h"
 #include "vcdiff.h"
-#define NOMINMAX
-#include <windows.h>
 #include <cstdio>
 #include <atomic>
 #include <cstring>
 #include <ctime>
+#include <cstdlib>
 #include <filesystem>
 #include <mutex>
 #include <thread>
@@ -52,15 +55,33 @@ std::unordered_map<uint8_t, uint32_t> g_payload_sizes = {
 // Sizes of the recording commands are configured by CMD_RECEIVE_COMMANDS at game start.
 std::unordered_map<uint8_t, uint32_t> g_record_sizes;
 
-std::vector<uint8_t> g_read_queue;
+// One response owns both its bytes and their provenance. The last response in
+// a command batch wins; commands without a response cannot disturb this pair.
+struct DmaResponse {
+  std::vector<uint8_t> bytes;
+  std::string module_name;
+  bool gecko_list = false;
+};
+DmaResponse g_response;
 uint32_t g_gct_address = 0;
-bool g_gecko_list_pending = false;   // next DMA read fetches the replay code list (playback)
 uint64_t g_commands = 0;
+RecordingEvents g_recording_events;
 std::string g_replay_dir = "replays";
 uint8_t g_frame_delay = 2;   // Slippi Online input delay setting (frames)
 
 inline void append_u32(std::vector<uint8_t>& q, uint32_t v) { q.push_back((uint8_t)(v >> 24)); q.push_back((uint8_t)(v >> 16)); q.push_back((uint8_t)(v >> 8)); q.push_back((uint8_t)v); }
 inline uint32_t be32(const uint8_t* p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; }
+
+void observe_recording_event(const uint8_t* data, size_t size) {
+  const uint8_t transition = g_recording_events.observe(data, size);
+  if (transition & RecordingEvents::Commands) host::log("accept: slippi event=commands frame=na");
+  if (transition & RecordingEvents::GameStart) host::log("accept: slippi event=game_start frame=na");
+  if (transition & RecordingEvents::GameEnd) {
+    if (g_recording_events.has_frames) host::log("accept: slippi event=game_end frame=%d", g_recording_events.max_frame);
+    else host::log("accept: slippi event=game_end frame=na");
+  }
+  if ((transition & RecordingEvents::MatchInputStart) && !online::is_online_match()) host::input_mark_match_start();
+}
 
 // ---- .slp replay recording (UBJSON container, exactly as CEXISlippi::writeToFile) ----
 FILE* g_file = nullptr;
@@ -108,10 +129,12 @@ void close_file() {
 
 void create_file() {
   close_file();
-  CreateDirectoryA(g_replay_dir.c_str(), nullptr);
+  std::error_code error;
+  std::filesystem::create_directories(g_replay_dir, error);
+  if (error) { host::log("slippi: cannot create replay directory: %s", error.message().c_str()); return; }
   char stamp[32];
   std::strftime(stamp, sizeof stamp, "%Y%m%dT%H%M%S", std::localtime(&g_start_time));
-  g_replay_path = g_replay_dir + "\\Game_" + stamp + ".slp";
+  g_replay_path = (std::filesystem::path(g_replay_dir) / (std::string("Game_") + stamp + ".slp")).string();
   g_file = std::fopen(g_replay_path.c_str(), "wb");
   if (!g_file) { host::log("slippi: cannot create %s", g_replay_path.c_str()); return; }
   const uint8_t header[] = {'{', 'U', 3, 'r', 'a', 'w', '[', '$', 'U', '#', 'l', 0, 0, 0, 0};
@@ -177,17 +200,19 @@ void apply_widescreen(bool on) {
 }
 
 void prepare_gct_length() {
-  g_read_queue.clear();
-  append_u32(g_read_queue, (uint32_t)gecko::slippi_gct_size);
+  DmaResponse response;
+  append_u32(response.bytes, (uint32_t)gecko::slippi_gct_size);
+  g_response = std::move(response);
 }
 
 void prepare_gct_load(const uint8_t* payload) {
-  g_read_queue.clear();
+  DmaResponse response;
   g_gct_address = be32(payload);
   host::log("slippi: game loads the GCT (%zu bytes) at %08X%s", gecko::slippi_gct_size, g_gct_address,
             gecko::gct_base_used == g_gct_address ? "" : " (recompile with --gct-base to translate C0 caves at this address)");
-  g_read_queue.insert(g_read_queue.end(), gecko::slippi_gct, gecko::slippi_gct + gecko::slippi_gct_size);
-  if (!gecko::option_widescreen) terminate_optional_codes(g_read_queue.data());
+  response.bytes.insert(response.bytes.end(), gecko::slippi_gct, gecko::slippi_gct + gecko::slippi_gct_size);
+  if (!gecko::option_widescreen) terminate_optional_codes(response.bytes.data());
+  g_response = std::move(response);
 }
 
 void log_message(const uint8_t* payload, uint32_t max) {
@@ -200,6 +225,21 @@ void log_message(const uint8_t* payload, uint32_t max) {
 // file of the same name from the ISO. Port of SlippiGameFileLoader::LoadFile.
 std::unordered_map<std::string, std::vector<uint8_t>> g_file_cache;
 std::mutex g_file_cache_mutex;   // the boot-time preload thread and the simulation thread share it
+std::optional<files::GameFileRoot> g_game_file_root;
+std::thread g_preload_thread;
+std::atomic<bool> g_preload_cancel{false};
+
+enum class FileLoadContext { Simulation, Preload };
+bool preload_cancelled(FileLoadContext context) {
+  return context == FileLoadContext::Preload &&
+         (g_preload_cancel.load() || host::background_failed());
+}
+
+void stop_preload() {
+  g_preload_cancel.store(true);
+  // Lifecycle operations run on the owner, never in the wrapped worker below.
+  if (g_preload_thread.joinable()) g_preload_thread.join();
+}
 
 bool read_whole_file(const std::string& path, std::vector<uint8_t>& out) {
   FILE* f = std::fopen(path.c_str(), "rb");
@@ -213,22 +253,27 @@ bool read_whole_file(const std::string& path, std::vector<uint8_t>& out) {
 
 // Reads and patches one file. Runs without the cache lock held: the preload worker must never
 // make the simulation thread wait behind a multi-megabyte read plus VCDIFF.
-std::vector<uint8_t> build_game_file(const std::string& name) {
+std::vector<uint8_t> build_game_file(const std::string& name, FileLoadContext context) {
   std::vector<uint8_t> out;
-  std::string base = host::options.sys_dir + "/GameFiles/GALE01/" + name;
+  if (preload_cancelled(context) || !g_game_file_root || !files::valid_name(name)) return out;
   std::vector<uint8_t> blob;
-  if (name != "MxDt.dat" && read_whole_file(base, blob)) {
+  const auto direct = g_game_file_root->file(name, false);
+  if (name != "MxDt.dat" && direct && read_whole_file(direct->string(), blob)) {
     out = std::move(blob);
     host::log("slippi: served %s (%zu bytes)", name.c_str(), out.size());
     return out;
   }
-  if (read_whole_file(base + ".diff", blob)) {
+  if (preload_cancelled(context)) return out;
+  const auto diff = g_game_file_root->file(name, true);
+  if (diff && read_whole_file(diff->string(), blob)) {
+    if (preload_cancelled(context)) return out;
     uint32_t off = 0, size = 0;
     std::vector<uint8_t> source;
     if (host::disc_find_file(name, &off, &size)) {
       source.resize(size);
       if (!host::disc_read(off, source.data(), size)) source.clear();
     }
+    if (preload_cancelled(context)) return out;
     std::string err;
     if (source.empty() || !host::vcdiff_decode(source.data(), source.size(), blob.data(), blob.size(), out, &err)) {
       host::log("slippi: cannot apply %s.diff (%s)", name.c_str(), source.empty() ? "file not on disc" : err.c_str());
@@ -242,24 +287,40 @@ std::vector<uint8_t> build_game_file(const std::string& name) {
   return out;
 }
 
-const std::vector<uint8_t>& load_game_file(const std::string& name) {
+const std::vector<uint8_t>& load_game_file(const std::string& name, FileLoadContext context) {
+  static const std::vector<uint8_t> cancelled;
+  if (preload_cancelled(context)) return cancelled;
   {
     std::lock_guard<std::mutex> lock(g_file_cache_mutex);   // node-based map: element references survive later inserts
     auto it = g_file_cache.find(name);
     if (it != g_file_cache.end()) return it->second;
   }
-  host::SimCostScope cost(host::SIM_EXI);
-  std::vector<uint8_t> built = build_game_file(name);
+  // Simulation cost arrays are owned by the simulation thread. Background
+  // warming must neither race those arrays nor count decode time as frame work.
+  std::optional<host::SimCostScope> cost;
+  if (context == FileLoadContext::Simulation) cost.emplace(host::SIM_EXI);
+  std::vector<uint8_t> built = build_game_file(name, context);
+  if (preload_cancelled(context)) return cancelled;
   std::lock_guard<std::mutex> lock(g_file_cache_mutex);
   return g_file_cache.emplace(name, std::move(built)).first->second;   // a racing preload already inserted: keep that copy
 }
 
-void prepare_file(const uint8_t* payload, bool load) {
-  g_read_queue.clear();
-  std::string name((const char*)payload, strnlen((const char*)payload, 0x40));
-  const std::vector<uint8_t>& data = load_game_file(name);
-  if (!load) append_u32(g_read_queue, (uint32_t)data.size());
-  else g_read_queue.insert(g_read_queue.end(), data.begin(), data.end());
+void prepare_file(const uint8_t* payload, uint32_t available, bool load) {
+  DmaResponse response;
+  const auto name = files::guest_name(payload, available);
+  if (!name) {
+    if (!load) append_u32(response.bytes, 0);
+    host::log("slippi: rejected invalid game-file request");
+    g_response = std::move(response);
+    return;
+  }
+  const std::vector<uint8_t>& data = load_game_file(*name, FileLoadContext::Simulation);
+  if (!load) append_u32(response.bytes, (uint32_t)data.size());
+  else {
+    response.bytes = data;
+    if (!data.empty()) response.module_name = *name;
+  }
+  g_response = std::move(response);
 }
 
 
@@ -270,26 +331,54 @@ void prepare_file(const uint8_t* payload, bool load) {
 // on the simulation thread.
 static void preload_game_files() {
   std::error_code ec;
-  std::filesystem::path dir = std::filesystem::path(host::options.sys_dir) / "GameFiles" / "GALE01";
+  const auto dir = g_game_file_root ? g_game_file_root->directory() : std::nullopt;
+  if (!dir) return;
   std::vector<std::string> names;
-  for (auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+  for (auto& entry : std::filesystem::directory_iterator(*dir, ec)) {
     if (!entry.is_regular_file(ec)) continue;
     std::string name = entry.path().filename().string();
     if (name.size() > 5 && name.compare(name.size() - 5, 5, ".diff") == 0) name.resize(name.size() - 5);
-    names.push_back(name);
+    if (files::valid_name(name)) names.push_back(name);
   }
-  std::thread([names] { for (const auto& n : names) load_game_file(n); }).detach();
+  g_preload_cancel.store(false);
+  g_preload_thread = std::thread([names = std::move(names)] {
+    host::run_background_task([&] {
+      for (const auto& n : names) {
+        if (preload_cancelled(FileLoadContext::Preload)) break;
+        load_game_file(n, FileLoadContext::Preload);
+      }
+    });
+  });
 }
 
-void init() { g_read_queue.reserve(64 * 1024); g_replay_dir = host::options.replay_dir; preload_game_files(); online::init(); }
+void init() {
+  stop_preload();
+  jukebox::init();
+  { std::lock_guard<std::mutex> lock(g_file_cache_mutex); g_file_cache.clear(); }
+  g_game_file_root.emplace(host::options.sys_dir);
+  g_recording_events = {};
+  g_record_sizes.clear();
+  g_response = {};
+  g_replay_dir = host::options.replay_dir;
+  online::config().offline = host::options.offline;
+  online::config().offline_seed = static_cast<uint32_t>(host::options.time_base);
+  online::init();
+  preload_game_files();
+}
 void request_widescreen(bool on) { g_widescreen_request.store(on ? 1 : 0); }
 bool widescreen() { return gecko::option_widescreen; }
 void poll_options() {
   int r = g_widescreen_request.exchange(-1);
   if (r >= 0 && (r != 0) != gecko::option_widescreen) apply_widescreen(r != 0);
 }
-void shutdown() { if (g_file) { uint8_t empty[1]; write_to_file(empty, 0, "close"); } online::shutdown(); }
+void shutdown() {
+  stop_preload();
+  jukebox::shutdown();
+  if (g_file) { uint8_t empty[1]; write_to_file(empty, 0, "close"); }
+  online::shutdown();
+}
 uint64_t replays_written() { return g_replays_written; }
+RecordingEvents recording_events() { return g_recording_events; }
 uint32_t gct_load_address() { return g_gct_address; }
 uint64_t commands_seen() { return g_commands; }
 const std::string& replay_directory() { return g_replay_dir; }
@@ -299,13 +388,22 @@ void imm_write(uint32_t, uint32_t) {}
 uint32_t imm_read(uint32_t) { return 0; }
 
 void dma_write(uint32_t addr, uint32_t size) {
+  if (!size) return;
   const uint8_t* mem = host::ptr(addr, size);
+  static const bool diag_exi = std::getenv("MELEE_DIAG_EXI") != nullptr;   // isolation aid
+  if (diag_exi) host::log("slippi: exi write %02X size %u at %08X (retrace %u)", mem[0], size, addr, host::retrace_count());
   uint32_t loc = 0;
   uint8_t byte = mem[0];
   if (byte == CMD_RECEIVE_COMMANDS) {
+    if (size < 2 || mem[1] < 1 || uint32_t(mem[1]) + 1 > size || (mem[1] - 1) % 3 != 0) {
+      host::log("slippi: rejected truncated recording command table");
+      return;
+    }
     std::time(&g_start_time);
     uint8_t len = mem[1];
+    g_record_sizes.clear();
     configure_commands(&mem[1], len);
+    observe_recording_event(mem, len + 1);
     write_to_file(&mem[0], len + 1, "create");
     loc += len + 1;
     ++g_commands;
@@ -320,33 +418,68 @@ void dma_write(uint32_t addr, uint32_t size) {
     if (fixed != g_payload_sizes.end()) payload = fixed->second;
     else if (rec != g_record_sizes.end()) payload = rec->second;
     else { host::log("slippi: invalid command byte %02X (previous %02X)", byte, prev); return; }
+    // Like Dolphin's CEXISlippi::DMAWrite, a command's payload is read from guest RAM at
+    // its table size even when the game transferred fewer bytes (file requests send
+    // strlen + 2). Only a payload that would leave guest RAM is rejected.
+    if (payload != 0xFFFF && payload > size - loc - 1) {
+      const uint32_t start = (addr + loc + 1) & 0x01FFFFFFu;
+      if (start + payload > 0x01800000u) {
+        host::log("slippi: rejected EXI command %02X whose payload leaves guest RAM (addr %08X, dma size %u)", byte, addr, size);
+        return;
+      }
+      mem = host::ptr(addr, loc + 1 + payload);
+    }
+    if (byte >= 0x36 && byte <= 0x39) observe_recording_event(&mem[loc], payload + 1);
     ++g_commands;
     switch (byte) {
       case CMD_GCT_LENGTH: prepare_gct_length(); break;
       case CMD_GCT_LOAD: prepare_gct_load(&mem[loc + 1]); break;
       case CMD_LOG_MESSAGE: log_message(&mem[loc + 1], size - loc - 1); break;
-      case CMD_FILE_LENGTH: prepare_file(&mem[loc + 1], false); break;
-      case CMD_FILE_LOAD: prepare_file(&mem[loc + 1], true); break;
-      case CMD_PREMADE_TEXT_LENGTH: g_read_queue.clear(); append_u32(g_read_queue, 0); break;
-      case CMD_PREMADE_TEXT_LOAD: g_read_queue.clear(); break;
+      case CMD_FILE_LENGTH: prepare_file(&mem[loc + 1], payload, false); break;
+      case CMD_FILE_LOAD: prepare_file(&mem[loc + 1], payload, true); break;
+      case CMD_PREMADE_TEXT_LENGTH: {
+        DmaResponse response;
+        append_u32(response.bytes, 0);
+        g_response = std::move(response);
+        break;
+      }
+      case CMD_PREMADE_TEXT_LOAD: g_response = {}; break;
       case CMD_PLAY_MUSIC: jukebox::start_song(be32(&mem[loc + 1]), be32(&mem[loc + 5])); break;
       case CMD_STOP_MUSIC: jukebox::stop(); break;
       case CMD_CHANGE_MUSIC_VOLUME: jukebox::set_melee_volume(mem[loc + 1]); break;
       case CMD_RECEIVE_COMMANDS: break;   // handled above
       case CMD_RECEIVE_GAME_END: write_to_file(&mem[loc], payload + 1, "close"); break;
       case CMD_FRAME_BOOKEND: write_to_file(&mem[loc], payload + 1, ""); break;
-      case CMD_PREPARE_REPLAY: playback::prepare_game_info(&mem[loc + 1], g_read_queue); break;
-      case CMD_READ_FRAME: playback::prepare_frame_data(&mem[loc + 1], g_read_queue); break;
-      case CMD_IS_STOCK_STEAL: playback::prepare_is_stock_steal(&mem[loc + 1], g_read_queue); break;
-      case CMD_IS_FILE_READY: playback::prepare_is_file_ready(g_read_queue); break;
-      case CMD_GET_GECKO_CODES: playback::prepare_gecko_codes(g_read_queue); g_gecko_list_pending = true; break;
-      case CMD_ONLINE_INPUTS: case CMD_CAPTURE_SAVESTATE: case CMD_LOAD_SAVESTATE: case CMD_GET_MATCH_STATE: case CMD_FIND_OPPONENT:
-      case CMD_SET_MATCH_SELECTIONS: case CMD_OPEN_LOGIN: case CMD_LOGOUT: case CMD_UPDATE: case CMD_CLEANUP_CONNECTION:
-      case CMD_SEND_CHAT_MESSAGE: case CMD_REPORT_GAME: case CMD_FETCH_CODE_SUGGESTION: case CMD_OVERWRITE_SELECTIONS:
-      case CMD_GP_COMPLETE_STEP: case CMD_GP_FETCH_STEP: case CMD_REPORT_SET_COMPLETE: case CMD_REPORT_MATCH_STATUS_UPDATE: case CMD_FETCH_RANK:
-      case CMD_GET_DELAY: case CMD_GET_ONLINE_STATUS: case CMD_GET_NEW_SEED: case CMD_GET_PLAYER_SETTINGS: case CMD_GET_RANK: case CMD_GET_RANK_VISIBILITY:
-        online::handle(byte, &mem[loc + 1], payload, g_read_queue);
+      case CMD_PREPARE_REPLAY: case CMD_READ_FRAME: case CMD_IS_STOCK_STEAL:
+      case CMD_IS_FILE_READY: case CMD_GET_GECKO_CODES: {
+        DmaResponse response;
+        switch (byte) {
+          case CMD_PREPARE_REPLAY: playback::prepare_game_info(&mem[loc + 1], response.bytes); break;
+          case CMD_READ_FRAME: playback::prepare_frame_data(&mem[loc + 1], response.bytes); break;
+          case CMD_IS_STOCK_STEAL: playback::prepare_is_stock_steal(&mem[loc + 1], response.bytes); break;
+          case CMD_IS_FILE_READY: playback::prepare_is_file_ready(response.bytes); break;
+          default: playback::prepare_gecko_codes(response.bytes); response.gecko_list = true; break;
+        }
+        g_response = std::move(response);
         break;
+      }
+      // These online commands own a response in both full and offline handlers.
+      case CMD_ONLINE_INPUTS: case CMD_GET_MATCH_STATE: case CMD_FETCH_CODE_SUGGESTION:
+      case CMD_GP_FETCH_STEP: case CMD_GET_DELAY: case CMD_GET_ONLINE_STATUS:
+      case CMD_GET_NEW_SEED: case CMD_GET_PLAYER_SETTINGS: case CMD_GET_RANK: case CMD_GET_RANK_VISIBILITY: {
+        DmaResponse response;
+        online::handle(byte, &mem[loc + 1], payload, response.bytes);
+        g_response = std::move(response);
+        break;
+      }
+      case CMD_CAPTURE_SAVESTATE: case CMD_LOAD_SAVESTATE: case CMD_FIND_OPPONENT:
+      case CMD_SET_MATCH_SELECTIONS: case CMD_OPEN_LOGIN: case CMD_LOGOUT: case CMD_UPDATE: case CMD_CLEANUP_CONNECTION:
+      case CMD_SEND_CHAT_MESSAGE: case CMD_REPORT_GAME: case CMD_OVERWRITE_SELECTIONS:
+      case CMD_GP_COMPLETE_STEP: case CMD_REPORT_SET_COMPLETE: case CMD_REPORT_MATCH_STATUS_UPDATE: case CMD_FETCH_RANK: {
+        std::vector<uint8_t> no_response;
+        online::handle(byte, &mem[loc + 1], payload, no_response);
+        break;
+      }
       default:
         // Recording payloads (game info, frames, items, bones...) go to the replay file.
         write_to_file(&mem[loc], payload + 1, "");
@@ -358,10 +491,20 @@ void dma_write(uint32_t addr, uint32_t size) {
 }
 
 void dma_read(uint32_t addr, uint32_t size) {
-  if (g_gecko_list_pending) { g_gecko_list_pending = false; playback::note_gecko_list_dma(addr, size); }
-  if (g_read_queue.empty()) { host::log("slippi: DMA read of %u bytes with an empty response queue", size); return; }
-  g_read_queue.resize(size, 0);
-  std::memcpy(host::ptr(addr, size), g_read_queue.data(), size);
+  if (!size) return;
+  DmaResponse response = std::move(g_response);
+  g_response = {};
+  if (response.gecko_list) playback::note_gecko_list_dma(addr, size);
+  if (response.bytes.empty()) { host::log("slippi: DMA read of %u bytes with an empty response queue", size); return; }
+  const uint32_t loaded = std::min<uint32_t>(size, static_cast<uint32_t>(response.bytes.size()));
+  response.bytes.resize(size, 0);
+  std::memcpy(host::ptr(addr, size), response.bytes.data(), size);
+  if (loaded && !response.module_name.empty()) {
+    // Hash exactly the post-DMA guest span recorded below, including all loaded
+    // patches. Source-file hashes and zero padding outside that span are unused.
+    const std::string sha256 = host::memory_sha256(host::ptr(addr, loaded), loaded);
+    ppc::record_loaded_module(response.module_name.c_str(), addr, loaded, sha256.c_str());
+  }
 }
 
 }  // namespace slippi

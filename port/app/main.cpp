@@ -10,6 +10,8 @@
 #include "slippi_online.h"
 #include "slippi_net.h"
 #include "audio.h"
+#include "hle_dvd.h"
+#include "numeric.h"
 #include "functions.h"
 #include "guest_symbols.h"
 #include "gx_core.h"
@@ -34,7 +36,7 @@ static void usage() {
   std::printf("melee_port --iso <path> [--frames N] [--fast] [--headless] [--scale N|auto] [--window WxH] [--vsync]\n"
               "           [--fps N|monitor|unlocked] [--frame-mode extrapolate|interpolate|authored|off] [--threaded-renderer]\n"
               "           [--fullscreen] [--dlss off|dlaa|quality|balanced|performance|ultra] [--frame-times out.csv] [--volume 0-100] [--audio-dump out.wav]\n"
-              "           [--capture out.ppm --capture-frame N] [--trace-calls] [--quiet]\n");
+              "           [--capture out.ppm --capture-frame N] [--trace-calls] [--quiet] [--strict-aot | --allow-interpreter]\n");
 }
 
 // Windows hands out ~15.6 ms timer granularity by default, so every pacing sleep (the 60 Hz
@@ -72,6 +74,7 @@ int main(int argc, char** argv) {
   TimerResolution timer_resolution;
   host::Options& o = host::options;
   bool headless = false, hidden = false, threaded = false, fps_requested = false;
+  bool allow_interpreter = true;  // preserve the existing Windows dynamic-module path until its AOT coverage is proven
   gx::D3D12Options gfx;
   bool automated = false, explicit_frame_mode = false;
   for (int i = 1; i < argc; ++i) {
@@ -93,6 +96,8 @@ int main(int argc, char** argv) {
     else if (a == "--state-trace") o.state_trace = next();
     else if (a == "--frames") o.frames = (uint32_t)std::strtoul(next(), nullptr, 0);
     else if (a == "--fast") o.fast = true;
+    else if (a == "--strict-aot") allow_interpreter = false;
+    else if (a == "--allow-interpreter") allow_interpreter = true;
     else if (a == "--headless") headless = true;
     else if (a == "--hidden") hidden = true;
     else if (a == "--threaded-renderer") threaded = true;
@@ -189,6 +194,9 @@ int main(int argc, char** argv) {
   host::audio_open(o.volume, o.audio_dump.c_str(), !headless);
 
   ppc::init_dispatch();
+  ppc::set_interpreter_allowed(allow_interpreter);
+  host::log("aot: %s", allow_interpreter ? "legacy Windows diagnostic interpreter enabled; use --strict-aot to reject missing translations" : "strict, missing translations stop execution");
+  ppc::ScopedGuestFpEnvironment fp_environment(0);
   host::boot_setup();
   host::log("boot: entering __start at %08X", 0x8000522Cu);
   int code = 0;
@@ -207,6 +215,7 @@ int main(int argc, char** argv) {
               (unsigned long long)host::audio_pushed_frames(), (unsigned long long)host::audio_dropped_blocks(),
               (unsigned long long)underruns, (unsigned long long)silent_ms, (rate_low - 1.0) * 100.0, (rate_high - 1.0) * 100.0); }
   host::audio_close();
+  hle::dvd_shutdown();
   host::updater::shutdown();   // the settings panel may have started an update check; join it before exit
   host::gcadapter_shutdown();
   slippi::shutdown();

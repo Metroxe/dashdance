@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "host.h"
 #include "memory_range.h"
-#include <windows.h>
-#include <bcrypt.h>
+#include "platform_file.h"
+#include "sha1.h"
 #include "functions.h"
 #include "guest_symbols.h"
 #include "gx_core.h"
 #include "window.h"
 #include "ax_ucode.h"
+#include "hle_dvd.h"
 #include "exi_slippi.h"
 #include "gecko_data.h"
 #include <chrono>
@@ -29,7 +30,6 @@ extern const size_t name_table_count;
 }
 namespace hle { void audio_tick(bool force); }
 
-namespace hle { void dvd_poll(); }
 namespace host {
 
 Options options;
@@ -39,6 +39,16 @@ ppc::Context* cpu = nullptr;
 
 static FILE* g_disc = nullptr;
 static FILE* g_state_trace = nullptr;
+static bool g_state_trace_ok = true;
+void close_state_trace() {
+  if (!g_state_trace) return;
+  if (std::fflush(g_state_trace) != 0 || std::ferror(g_state_trace)) g_state_trace_ok = false;
+  if (std::fclose(g_state_trace) != 0) g_state_trace_ok = false;
+  g_state_trace = nullptr;
+}
+bool state_trace_output_ok() { return g_state_trace_ok; }
+static std::string g_dol_sha1;
+static bool g_dol_verified = false;
 static uint32_t g_fst_offset, g_fst_size, g_fst_max;
 static std::deque<Completion> g_completions;
 static bool g_pe_finish_pending = false;
@@ -50,58 +60,17 @@ static std::atomic<int> g_exit_code{0};
 static std::chrono::steady_clock::time_point g_next_frame;
 static uint8_t g_mmio[0x10000];      // 0xCC000000 - 0xCC00FFFF register file (big-endian bytes)
 static bool g_in_interrupt = false;
-
-// ---------------- logging ----------------
-// Every line also goes to melee_port.log in the working directory (truncated at start), so a play
-// session can be inspected afterwards without the console window.
-static FILE* g_log_file = nullptr;
-static void open_log_file() {
-  static bool tried = false;
-  if (tried) return;
-  tried = true;
-  g_log_file = std::fopen(options.log_file.empty() ? "melee_port.log" : options.log_file.c_str(), "w");
+static SceneTrace g_scene_trace;
+static std::mutex g_scene_mutex;
+static void observe_scene() {
+  if (!options.trace_scenes) return;
+  uint8_t mode = rd8(SCENE_MODE_ADDRESS), state = rd8(SCENE_STATE_ADDRESS);
+  bool changed;
+  { std::lock_guard<std::mutex> lock(g_scene_mutex); changed = g_scene_trace.observe(g_retraces, mode, state); }
+  if (changed) log("accept: scene retrace=%u mode_byte=0x%02X state_byte=0x%02X combined=0x%04X",
+                   g_retraces, mode, state, (unsigned(state) << 8) | mode);
 }
-void log(const char* fmt, ...) {
-  if (options.quiet) return;
-  open_log_file();
-  va_list ap; va_start(ap, fmt);
-  std::vfprintf(stdout, fmt, ap);
-  va_end(ap);
-  std::fputc('\n', stdout);
-  std::fflush(stdout);
-  if (g_log_file) {
-    va_list ap2; va_start(ap2, fmt);
-    std::vfprintf(g_log_file, fmt, ap2);
-    va_end(ap2);
-    std::fputc('\n', g_log_file);
-    std::fflush(g_log_file);
-  }
-}
-
-void log_guest_text(const char* data, size_t len) {
-  std::fwrite(data, 1, len, stdout);
-  std::fflush(stdout);
-  if (g_log_file) { std::fwrite(data, 1, len, g_log_file); std::fflush(g_log_file); }
-}
-
-[[noreturn]] void die(const char* fmt, ...) {
-  va_list ap; va_start(ap, fmt);
-  std::fprintf(stderr, "\nFATAL: ");
-  std::vfprintf(stderr, fmt, ap);
-  std::fprintf(stderr, "\n");
-  va_end(ap);
-  if (g_log_file) {
-    va_list ap2; va_start(ap2, fmt);
-    std::fprintf(g_log_file, "\nFATAL: ");
-    std::vfprintf(g_log_file, fmt, ap2);
-    std::fprintf(g_log_file, "\n");
-    va_end(ap2);
-    std::fflush(g_log_file);
-  }
-  std::fflush(stderr);
-  std::fflush(stdout);
-  std::exit(3);
-}
+SceneTrace scene_trace_snapshot() { std::lock_guard<std::mutex> lock(g_scene_mutex); return g_scene_trace; }
 
 const char* symbol_name(uint32_t addr) {
   // Binary search the sorted function name table for the containing function.
@@ -120,11 +89,11 @@ uint8_t* ptr(uint32_t addr, uint32_t bytes) {
   if (!valid_range(off, bytes, ppc::RAM_SIZE)) die("host access outside RAM: %08X+%X", addr, bytes);
   return ram + off;
 }
-uint32_t rd32(uint32_t a) { uint32_t v; std::memcpy(&v, ptr(a, 4), 4); return _byteswap_ulong(v); }
-uint16_t rd16(uint32_t a) { uint16_t v; std::memcpy(&v, ptr(a, 2), 2); return _byteswap_ushort(v); }
+uint32_t rd32(uint32_t a) { const uint8_t* p = ptr(a, 4); return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3]; }
+uint16_t rd16(uint32_t a) { const uint8_t* p = ptr(a, 2); return uint16_t((uint16_t(p[0]) << 8) | p[1]); }
 uint8_t rd8(uint32_t a) { return *ptr(a); }
-void wr32(uint32_t a, uint32_t v) { v = _byteswap_ulong(v); std::memcpy(ptr(a, 4), &v, 4); }
-void wr16(uint32_t a, uint16_t v) { v = _byteswap_ushort(v); std::memcpy(ptr(a, 2), &v, 2); }
+void wr32(uint32_t a, uint32_t v) { uint8_t* p = ptr(a, 4); p[0] = uint8_t(v >> 24); p[1] = uint8_t(v >> 16); p[2] = uint8_t(v >> 8); p[3] = uint8_t(v); }
+void wr16(uint32_t a, uint16_t v) { uint8_t* p = ptr(a, 2); p[0] = uint8_t(v >> 8); p[1] = uint8_t(v); }
 void wr8(uint32_t a, uint8_t v) { *ptr(a) = v; }
 std::string cstr(uint32_t addr, size_t max) {
   std::string s;
@@ -150,7 +119,7 @@ static std::mutex g_disc_mutex;   // the DVD worker and the simulation thread sh
 bool disc_read(uint32_t offset, void* dst, uint32_t size) {
   std::lock_guard<std::mutex> lk(g_disc_mutex);
   if (!g_disc) return false;
-  if (_fseeki64(g_disc, offset, SEEK_SET) != 0) return false;
+  if (!seek_file(g_disc, offset)) return false;
   ++g_disc_reads;
   g_disc_bytes += size;
   return std::fread(dst, 1, size, g_disc) == size;
@@ -179,8 +148,7 @@ bool disc_find_file(const std::string& name, uint32_t* offset, uint32_t* size) {
       if (so >= fst.size()) continue;
       const char* n = (const char*)&fst[so];
       size_t maxlen = fst.size() - so;
-      bool match = pass == 0 ? (std::strncmp(n, name.c_str(), maxlen) == 0) : (_strnicmp(n, name.c_str(), maxlen) == 0);
-      if (match && std::strlen(n) == name.size()) {
+      if (fst_name_equal(n, maxlen, name, pass != 0)) {
         if (offset) *offset = be32(i * 12 + 4);
         if (size) *size = be32(i * 12 + 8);
         return true;
@@ -190,6 +158,8 @@ bool disc_find_file(const std::string& name, uint32_t* offset, uint32_t* size) {
   return false;
 }
 uint32_t disc_fst_max_size() { return g_fst_max; }
+const std::string& disc_dol_sha1() { return g_dol_sha1; }
+bool disc_dol_verified() { return g_dol_verified; }
 
 // ---------------- boot ----------------
 static void load_dol_from_disc() {
@@ -199,15 +169,13 @@ static void load_dol_from_disc() {
   constexpr uint32_t dol_size = 0x4385E0u;
   std::vector<uint8_t> image(dol_size);
   if (!disc_read(dol_offset, image.data(), dol_size)) die("cannot read full Melee DOL");
-  BCRYPT_ALG_HANDLE algorithm = nullptr;
-  uint8_t digest[20];
+  const auto digest = sha1(image.data(), image.size());
+  g_dol_sha1.clear();
+  for (uint8_t byte : digest) { g_dol_sha1 += "0123456789abcdef"[byte >> 4]; g_dol_sha1 += "0123456789abcdef"[byte & 15]; }
   const uint8_t expected[20] = {0x08,0xe0,0xbf,0x20,0x13,0x4d,0xfc,0xb2,0x60,0x69,0x96,0x71,0x00,0x45,0x27,0xb2,0xd6,0xbb,0x1a,0x45};
-  if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA1_ALGORITHM, nullptr, 0) < 0)
-    die("cannot initialize game-image verification");
-  NTSTATUS hash_status = BCryptHash(algorithm, nullptr, 0, image.data(), dol_size, digest, sizeof digest);
-  BCryptCloseAlgorithmProvider(algorithm, 0);
-  if (hash_status < 0 || std::memcmp(digest, expected, sizeof digest))
+  if (std::memcmp(digest.data(), expected, digest.size()))
     die("ISO DOL does not match vanilla Melee NTSC 1.02; recompiled code cannot run this image");
+  g_dol_verified = true;
   uint8_t dh[0x100];
   if (!disc_read(dol_offset, dh, sizeof dh)) die("cannot read DOL header");
   auto be = [&](int o) { return ((uint32_t)dh[o] << 24) | ((uint32_t)dh[o + 1] << 16) | ((uint32_t)dh[o + 2] << 8) | dh[o + 3]; };
@@ -279,7 +247,7 @@ void boot_setup() {
   wr32(0x80000800, 0x4C000064);
   wr32(0x80000C00, 0x4C000064);
   uint64_t tb = options.time_base;
-  if (!tb) {
+  if (!tb && !options.time_base_set) {
     // Dolphin presets the timebase from the RTC (seconds since GC epoch 2000-01-01) * 40.5 MHz.
     auto now = std::chrono::system_clock::now().time_since_epoch();
     uint64_t secs = (uint64_t)std::chrono::duration_cast<std::chrono::seconds>(now).count();
@@ -306,6 +274,7 @@ void boot_setup() {
   cpu->fpscr = 0;
   ppc::update_mxcsr(*cpu);
   g_next_frame = std::chrono::steady_clock::now();
+  observe_scene();
 }
 
 // ---------------- guest calls from host ----------------
@@ -364,6 +333,8 @@ static bool deliver_completions(bool force);
 
 static void validate_alarm_queue(const char* where);
 void pump_completions() {
+  std::string background_error;
+  if (take_background_failure(background_error)) die("background task failed: %s", background_error.c_str());
   // Called from HLE entry points the guest polls. Virtual time flows a little so periodic
   // alarms (pad sampling) fire even in loops that never sleep. Nothing is delivered while the
   // guest has interrupts disabled; ppc::mtmsr flushes when they come back on.
@@ -531,6 +502,7 @@ void retrace() {
   di0 |= 0x8000;
   g_mmio[0x2030] = (uint8_t)(di0 >> 8); g_mmio[0x2031] = (uint8_t)di0;
   deliver_interrupt(24);  // __OS_INTERRUPT_PI_VI
+  observe_scene();
   trace_state();
   if (g_retraces % 60 == 0 || (options.frames && g_retraces >= options.frames)) {
     uint64_t commands, draws, vertices; uint32_t copies;
@@ -571,6 +543,8 @@ static bool deliver_completions(bool force) {
 }
 
 void wait_event() {
+  std::string background_error;
+  if (take_background_failure(background_error)) die("background task failed: %s", background_error.c_str());
   if (g_pe_finish_pending) {
     g_pe_finish_pending = false;
     // PE_ISR (0xCC00100A): finish interrupt status bit 3.

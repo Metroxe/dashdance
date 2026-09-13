@@ -1,12 +1,12 @@
 // Gekko interpreter for code that only exists in RAM at run time (Slippi's SlippiCSS.dat
 // "mnFunction" code, any other dat-loaded or Gecko-generated routine). ppc::call falls back
-// to it when a target has no recompiled function. Semantics mirror recomp/emit.py (Jit64
-// equivalents) instruction for instruction, using the same helpers, so a routine behaves the
-// same whether translated or interpreted.
+// to it only when diagnostic interpretation is explicitly enabled. It is not part
+// of the strict AOT execution contract. Arithmetic uses the emitter's numeric helpers.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "ppc.h"
 #include "host.h"
 #include <cstdio>
+#include <atomic>
 
 namespace ppc {
 Fn lookup(uint32_t addr);
@@ -41,11 +41,14 @@ struct Interp {
   // Control transfer to `t` after the link register has been set as the instruction requires.
   // Host functions are called and then execution resumes at LR (what their blr would do).
   void transfer(uint32_t t, bool linked) {
+    record_interpreter_transfer(pc, t, AotTransferKind::GuestBranch);
     for (;;) {
       if (Fn fn = lookup(t)) {
+        record_interpreter_transfer(pc, t, AotTransferKind::CallToAot);
         if (++c.call_depth > 20000) fatal(c, "guest call depth exceeded", t);
         fn(c, m);
         --c.call_depth;
+        record_interpreter_transfer(t, linked ? pc + 4 : c.lr, AotTransferKind::ReturnFromAot);
         if (linked) { pc += 4; return; }         // bl to host code: continue after the call
         t = c.lr;                                 // tail transfer: the host function returned to LR
         if (t == entry_lr) { done = true; return; }
@@ -96,6 +99,7 @@ struct Interp {
 
   void step() {
     uint32_t w = ld32(c, m, pc);
+    record_interpreter_instruction(pc, w);
     uint32_t op = w >> 26;
     uint32_t rd = bits(w, 6, 5), ra = bits(w, 11, 5), rb = bits(w, 16, 5), rs = rd;
     uint32_t simm = sext16(w & 0xFFFF), uimm = w & 0xFFFF;
@@ -105,7 +109,7 @@ struct Interp {
     switch (op) {
       // ---------------- D-form integer ----------------
       case 3: break;  // twi
-      case 7: R[rd] = (uint32_t)((int32_t)R[ra] * (int32_t)simm); break;
+      case 7: R[rd] = R[ra] * simm; break;
       case 8: { uint32_t a = R[ra]; R[rd] = simm - a; c.ca = (a == 0) || carry(0u - a, simm); break; }
       case 10: cr_set_u(c, bits(w, 6, 3), R[ra], uimm); break;
       case 11: cr_set_s(c, bits(w, 6, 3), (int32_t)R[ra], (int32_t)simm); break;
@@ -150,9 +154,9 @@ struct Interp {
       case 60: psq_store(c, m, A + sext12(w & 0xFFF), rs, bits(w, 16, 1), bits(w, 17, 3)); break;
       case 61: { uint32_t ea = R[ra] + sext12(w & 0xFFF); psq_store(c, m, ea, rs, bits(w, 16, 1), bits(w, 17, 3)); R[ra] = ea; break; }
       // ---------------- rotates ----------------
-      case 20: { uint32_t mk = mask(bits(w, 21, 5), bits(w, 26, 5)); R[ra] = (R[ra] & ~mk) | (_rotl(R[rs], rb) & mk); if (rc) cr0(c, R[ra]); break; }
-      case 21: { uint32_t mk = mask(bits(w, 21, 5), bits(w, 26, 5)); R[ra] = _rotl(R[rs], rb) & mk; if (rc) cr0(c, R[ra]); break; }
-      case 23: { uint32_t mk = mask(bits(w, 21, 5), bits(w, 26, 5)); R[ra] = _rotl(R[rs], R[rb] & 31) & mk; if (rc) cr0(c, R[ra]); break; }
+      case 20: { uint32_t mk = mask(bits(w, 21, 5), bits(w, 26, 5)); R[ra] = (R[ra] & ~mk) | (rotl32(R[rs], rb) & mk); if (rc) cr0(c, R[ra]); break; }
+      case 21: { uint32_t mk = mask(bits(w, 21, 5), bits(w, 26, 5)); R[ra] = rotl32(R[rs], rb) & mk; if (rc) cr0(c, R[ra]); break; }
+      case 23: { uint32_t mk = mask(bits(w, 21, 5), bits(w, 26, 5)); R[ra] = rotl32(R[rs], R[rb] & 31) & mk; if (rc) cr0(c, R[ra]); break; }
       // ---------------- branches ----------------
       case 16: {
         uint32_t bo = rd, bi = ra;
@@ -221,7 +225,7 @@ struct Interp {
           case 10: { uint32_t a = R[ra]; R[rd] = a + B; c.ca = carry(a, B); break; }
           case 11: R[rd] = (uint32_t)(((uint64_t)R[ra] * (uint64_t)B) >> 32); break;
           case 40: R[rd] = B - R[ra]; break;
-          case 75: R[rd] = (uint32_t)(((int64_t)(int32_t)R[ra] * (int64_t)(int32_t)B) >> 32); break;
+          case 75: R[rd] = mulhw(R[ra], B); break;
           case 104: R[rd] = 0u - R[ra]; break;
           case 136: { uint32_t a = ~R[ra], k = c.ca; R[rd] = a + B + k; c.ca = carry(a, B) || carry(a + B, k); break; }
           case 138: { uint32_t a = R[ra], k = c.ca; R[rd] = a + B + k; c.ca = carry(a, B) || (k && carry(a + B, k)); break; }
@@ -229,7 +233,7 @@ struct Interp {
           case 202: { uint32_t a = R[ra], k = c.ca; R[rd] = a + k; c.ca = carry(a, k); break; }
           case 232: { uint32_t a = ~R[ra], k = c.ca; R[rd] = a + k - 1u; c.ca = carry(a, k - 1u); break; }
           case 234: { uint32_t a = R[ra], k = c.ca; R[rd] = a + k - 1u; c.ca = carry(a, k - 1u); break; }
-          case 235: R[rd] = (uint32_t)((int32_t)R[ra] * (int32_t)B); break;
+          case 235: R[rd] = R[ra] * B; break;
           case 266: R[rd] = R[ra] + B; break;
           case 459: R[rd] = divwu(R[ra], B); break;
           case 491: R[rd] = divw((int32_t)R[ra], (int32_t)B); break;
@@ -308,15 +312,15 @@ struct Interp {
         uint32_t xo = bits(w, 26, 5), fa = ra, fb = rb, fc = bits(w, 21, 5);
         double a = F0(fa), b = F0(fb), k = F0(fc), r;
         switch (xo) {
-          case 18: r = fs(a / b); break;
-          case 20: r = fs(a - b); break;
-          case 21: r = fs(a + b); break;
+          case 18: r = fs(fdiv(a, b)); break;
+          case 20: r = fs(fsub(a, b)); break;
+          case 21: r = fs(fadd(a, b)); break;
           case 24: r = fres(b); break;
-          case 25: r = fs(a * f25(k)); break;
-          case 28: r = fs(fmsub(a, f25(k), b)); break;
-          case 29: r = fs(fmadd(a, f25(k), b)); break;
-          case 30: r = fs(fnmsub(a, f25(k), b)); break;
-          case 31: r = fs(fnmadd(a, f25(k), b)); break;
+          case 25: r = fs(fmul(a, f25(k))); break;
+          case 28: r = fmsubs(a, f25(k), b); break;
+          case 29: r = fmadds(a, f25(k), b); break;
+          case 30: r = fnmsubs(a, f25(k), b); break;
+          case 31: r = fnmadds(a, f25(k), b); break;
           default: unsupported(w); return;
         }
         F0(rd) = F1(rd) = r;
@@ -326,11 +330,11 @@ struct Interp {
         uint32_t xo5 = bits(w, 26, 5), xo = bits(w, 21, 10), fa = ra, fb = rb, fc = bits(w, 21, 5);
         double a = F0(fa), b = F0(fb), k = F0(fc);
         switch (xo5) {
-          case 18: F0(rd) = a / b; return_ok: pc += 4; return;
-          case 20: F0(rd) = a - b; goto return_ok;
-          case 21: F0(rd) = a + b; goto return_ok;
+          case 18: F0(rd) = fdiv(a, b); return_ok: pc += 4; return;
+          case 20: F0(rd) = fsub(a, b); goto return_ok;
+          case 21: F0(rd) = fadd(a, b); goto return_ok;
           case 23: F0(rd) = (a >= -0.0) ? k : b; goto return_ok;
-          case 25: F0(rd) = a * k; goto return_ok;
+          case 25: F0(rd) = fmul(a, k); goto return_ok;
           case 26: F0(rd) = frsqrte(b); goto return_ok;
           case 28: F0(rd) = fmsub(a, k, b); goto return_ok;
           case 29: F0(rd) = fmadd(a, k, b); goto return_ok;
@@ -343,19 +347,19 @@ struct Interp {
           case 12: F0(rd) = F1(rd) = fs(b); break;
           case 14: U0(rd) = fctiw(b, false); break;
           case 15: U0(rd) = fctiw(b, true); break;
-          case 38: c.fpscr |= 0x80000000u >> rd; update_mxcsr(c); break;
+          case 38: c.fpscr |= 0x80000000u >> rd; update_fp_environment(c); break;
           case 40: U0(rd) = U0(fb) ^ 0x8000000000000000ull; break;
           case 64: c.cr[bits(w, 6, 3)] = (uint8_t)((c.fpscr >> (28 - 4 * bits(w, 11, 3))) & 15); break;
-          case 70: c.fpscr &= ~(0x80000000u >> rd); update_mxcsr(c); break;
+          case 70: c.fpscr &= ~(0x80000000u >> rd); update_fp_environment(c); break;
           case 72: U0(rd) = U0(fb); break;
-          case 134: { uint32_t sh = 28 - 4 * bits(w, 6, 3); c.fpscr = (c.fpscr & ~(0xFu << sh)) | (bits(w, 16, 4) << sh); update_mxcsr(c); break; }
+          case 134: { uint32_t sh = 28 - 4 * bits(w, 6, 3); c.fpscr = (c.fpscr & ~(0xFu << sh)) | (bits(w, 16, 4) << sh); update_fp_environment(c); break; }
           case 136: U0(rd) = U0(fb) | 0x8000000000000000ull; break;
           case 264: U0(rd) = U0(fb) & 0x7FFFFFFFFFFFFFFFull; break;
           case 583: U0(rd) = 0xFFF8000000000000ull | c.fpscr; break;
           case 711: {
             uint32_t fm = bits(w, 7, 8), mk = 0;
             for (int i = 0; i < 8; ++i) if (fm & (0x80 >> i)) mk |= 0xFu << (28 - 4 * i);
-            c.fpscr = (c.fpscr & ~mk) | ((uint32_t)U0(fb) & mk); update_mxcsr(c); break;
+            c.fpscr = (c.fpscr & ~mk) | ((uint32_t)U0(fb) & mk); update_fp_environment(c); break;
           }
           default: unsupported(w); return;
         }
@@ -374,23 +378,23 @@ struct Interp {
         double a0 = F0(fa), a1 = F1(fa), b0 = F0(fb), b1 = F1(fb), k0 = F0(fc), k1 = F1(fc), x, y;
         bool ps = true;
         switch (xo5) {
-          case 10: x = a0 + b1; y = k1; break;
-          case 11: x = k0; y = a0 + b1; break;
-          case 12: { double k = f25(k0); x = a0 * k; y = a1 * k; break; }
-          case 13: { double k = f25(k1); x = a0 * k; y = a1 * k; break; }
-          case 14: { double k = f25(k0); x = fmadd(a0, k, b0); y = fmadd(a1, k, b1); break; }
-          case 15: { double k = f25(k1); x = fmadd(a0, k, b0); y = fmadd(a1, k, b1); break; }
-          case 18: x = a0 / b0; y = a1 / b1; break;
-          case 20: x = a0 - b0; y = a1 - b1; break;
-          case 21: x = a0 + b0; y = a1 + b1; break;
+          case 10: x = fadd(a0, b1); y = k1; break;
+          case 11: x = k0; y = fadd(a0, b1); break;
+          case 12: { double k = f25(k0); x = fmul(a0, k); y = fmul(a1, k); break; }
+          case 13: { double k = f25(k1); x = fmul(a0, k); y = fmul(a1, k); break; }
+          case 14: { double k = f25(k0); x = fmadds(a0, k, b0); y = fmadds(a1, k, b1); break; }
+          case 15: { double k = f25(k1); x = fmadds(a0, k, b0); y = fmadds(a1, k, b1); break; }
+          case 18: x = fdiv(a0, b0); y = fdiv(a1, b1); break;
+          case 20: x = fsub(a0, b0); y = fsub(a1, b1); break;
+          case 21: x = fadd(a0, b0); y = fadd(a1, b1); break;
           case 23: F0(rd) = (a0 >= -0.0) ? k0 : b0; F1(rd) = (a1 >= -0.0) ? k1 : b1; ps = false; goto ps_done;
           case 24: x = fres(b0); y = fres(b1); break;
-          case 25: x = a0 * f25(k0); y = a1 * f25(k1); break;
+          case 25: x = fmul(a0, f25(k0)); y = fmul(a1, f25(k1)); break;
           case 26: x = frsqrte(b0); y = frsqrte(b1); break;
-          case 28: x = fmsub(a0, f25(k0), b0); y = fmsub(a1, f25(k1), b1); break;
-          case 29: x = fmadd(a0, f25(k0), b0); y = fmadd(a1, f25(k1), b1); break;
-          case 30: x = fnmsub(a0, f25(k0), b0); y = fnmsub(a1, f25(k1), b1); break;
-          case 31: x = fnmadd(a0, f25(k0), b0); y = fnmadd(a1, f25(k1), b1); break;
+          case 28: x = fmsubs(a0, f25(k0), b0); y = fmsubs(a1, f25(k1), b1); break;
+          case 29: x = fmadds(a0, f25(k0), b0); y = fmadds(a1, f25(k1), b1); break;
+          case 30: x = fnmsubs(a0, f25(k0), b0); y = fnmsubs(a1, f25(k1), b1); break;
+          case 31: x = fnmadds(a0, f25(k0), b0); y = fnmadds(a1, f25(k1), b1); break;
           default: ps = false; break;
         }
         if (ps) { F0(rd) = fs(x); F1(rd) = fs(y); break; }
@@ -417,18 +421,24 @@ struct Interp {
   }
 };
 
-uint64_t g_interpreted_calls = 0, g_interpreted_insns = 0;
+std::atomic<uint64_t> g_interpreted_calls{0}, g_interpreted_insns{0};
 
 }  // namespace
 
 void interpret(Context& c, uint8_t* m, uint32_t addr) {
+  record_interpreter_entry(c, addr);
   if (!fast(m, addr) || (addr & 3)) fatal(c, "call to unmapped guest address", addr);
-  ++g_interpreted_calls;
+  g_interpreted_calls.fetch_add(1, std::memory_order_relaxed);
   enter(c, addr);
   Interp in(c, m, addr);
-  while (!in.done) { in.step(); ++g_interpreted_insns; }
+  record_interpreter_transfer(c.lr, addr, AotTransferKind::Entry);
+  while (!in.done) { in.step(); g_interpreted_insns.fetch_add(1, std::memory_order_relaxed); }
+  record_interpreter_transfer(in.pc, c.lr, AotTransferKind::Exit);
 }
 
-void interpreter_stats(uint64_t* calls, uint64_t* insns) { *calls = g_interpreted_calls; *insns = g_interpreted_insns; }
+void interpreter_stats(uint64_t* calls, uint64_t* insns) {
+  *calls = g_interpreted_calls.load(std::memory_order_relaxed);
+  *insns = g_interpreted_insns.load(std::memory_order_relaxed);
+}
 
 }  // namespace ppc

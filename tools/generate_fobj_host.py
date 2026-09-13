@@ -5,10 +5,25 @@ with bounded little-endian reads, assertions with errors, and guest callbacks wi
 a local scalar sink. No allocator, JObj, game memory, or emulation is linked.
 """
 from pathlib import Path
-import sys
+import argparse
+import hashlib
+import json
 
 root = Path(__file__).resolve().parents[1]
-base = root / 'melee/src/sysdolphin/baselib'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('output', type=Path)
+parser.add_argument('--decomp-root', type=Path, default=root / 'melee',
+                    help='explicit doldecomp/melee source root; no files are copied')
+args = parser.parse_args()
+pins = json.loads((root / 'tools/port_source_pins.json').read_text(encoding='utf-8'))
+base = args.decomp_root.resolve() / 'src/sysdolphin/baselib'
+for name in ('fobj.c', 'fobj.h', 'spline.c'):
+    path = base / name
+    relative = 'src/sysdolphin/baselib/' + name
+    if not path.is_file():
+        parser.error(f'missing {path}; set --decomp-root to the pinned decomp checkout')
+    if hashlib.sha256(path.read_bytes()).hexdigest() != pins['decomp']['files_sha256'][relative]:
+        parser.error(f'{path} does not match pinned decomp revision {pins["decomp"]["commit"]}')
 source = (base / 'fobj.c').read_text()
 source = source[source.index('u32 HSD_FObjSetState'):source.index('HSD_FObj* HSD_FObjLoadDesc')]
 header = (base / 'fobj.h').read_text()
@@ -115,6 +130,6 @@ bool SamplePacked(const PackedTrack& track, float frame, float& value) {
 }
 }
 '''
-output = Path(sys.argv[1])
+output = args.output
 output.parent.mkdir(parents=True, exist_ok=True)
 output.write_text(preamble + constants + structure + spline + source + footer)

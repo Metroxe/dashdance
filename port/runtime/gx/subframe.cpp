@@ -46,6 +46,25 @@ bool same_textures(const DrawCall& a, const DrawCall& b) {
   return true;
 }
 
+// Exact geometry is the reuse gate. A stable draw address/ordinal does not prove
+// that regenerated vertices describe the same surface. Ignore only padding and
+// attributes absent from the captured layout; compare every active input.
+bool same_geometry(const Vertex* a, const Vertex* b, uint32_t count, uint32_t components) {
+  if (components & VB_UNCAPTURED_NBT) return false;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (std::memcmp(a[i].pos, b[i].pos, sizeof a[i].pos)) return false;
+    if ((components & VB_HAS_POSMTXIDX) && a[i].posmtx != b[i].posmtx) return false;
+    if ((components & VB_HAS_NRM0) && std::memcmp(a[i].nrm, b[i].nrm, sizeof a[i].nrm)) return false;
+    if ((components & VB_HAS_COL0) && std::memcmp(a[i].col0, b[i].col0, sizeof a[i].col0)) return false;
+    if ((components & VB_HAS_COL1) && std::memcmp(a[i].col1, b[i].col1, sizeof a[i].col1)) return false;
+    for (unsigned k = 0; k < 8; ++k) {
+      if ((components & (VB_HAS_UV0 << k)) && std::memcmp(a[i].uv[k], b[i].uv[k], sizeof a[i].uv[k])) return false;
+      if ((components & (VB_HAS_TEXMTXIDX0 << k)) && a[i].texmtx[k] != b[i].texmtx[k]) return false;
+    }
+  }
+  return true;
+}
+
 // 3x4 row-major affine (XF layout): rows r0..r2, translation in column 3.
 struct Affine { float m[12]; };
 
@@ -229,20 +248,20 @@ void SubFrameSolver::set_frames(const Frame* prev, const Frame* cur) {
       const DrawCall& pd = prev->draws[it->second];
       bool vertex_ranges_valid = pd.first_vertex <= prev->vertices.size() && pd.vertex_count <= prev->vertices.size() - pd.first_vertex &&
           d.first_vertex <= cur->vertices.size() && d.vertex_count <= cur->vertices.size() - d.first_vertex;
-      // Same stream, byte for byte: the draw moves by its matrices alone. Otherwise the geometry
-      // itself is animated, and the two streams are blended per presented frame (below) as long as
-      // they still describe the same primitive with the same layout.
       bool same_vertices = vertex_ranges_valid && d.vertex_count && pd.vertex_count == d.vertex_count &&
-          !std::memcmp(prev->vertices.data() + pd.first_vertex, cur->vertices.data() + d.first_vertex,
-                       (size_t)d.vertex_count * sizeof(Vertex));
+          same_geometry(prev->vertices.data() + pd.first_vertex, cur->vertices.data() + d.first_vertex,
+                        d.vertex_count, d.components);
       bool valid = false;
       if (d.object_generation != pd.object_generation) ++stats_.missing;
       else if (d.xf_regs[0x26] != 0) ++stats_.hud;
       else if (!vertex_ranges_valid || !d.vertex_count || pd.vertex_count != d.vertex_count ||
-          pd.primitive != d.primitive || pd.components != d.components) ++stats_.geometry;
+          pd.primitive != d.primitive || pd.components != d.components || !same_vertices ||
+          pd.matrix_index_a != d.matrix_index_a || pd.matrix_index_b != d.matrix_index_b ||
+          pd.xf_regs[0x12] != d.xf_regs[0x12] ||
+          std::memcmp(&pd.xf_regs[0x3F], &d.xf_regs[0x3F], (0x58 - 0x3F) * sizeof(uint32_t))) ++stats_.geometry;
       else if (!same_draw_bp(pd.bp, d.bp, stats_.state_register) || !same_textures(pd, d)) ++stats_.state;
       else if (std::memcmp(&pd.xf_regs[0x20], &d.xf_regs[0x20], 7 * sizeof(uint32_t))) ++stats_.projection;
-      else { valid = true; p.blend_vertices = !same_vertices; }
+      else { valid = true; }
       if (valid) {
         p.prev_draw = it->second;
         // Collect used position matrix slots: per-vertex indices or the CP default, plus texgen matrices.
@@ -457,6 +476,7 @@ void SubFrameSolver::build(double t, bool interpolate, std::vector<DrawMatrices>
     const DrawCall& base = (interpolate && pd) ? *pd : d;
     std::memcpy(o.pos, base.posMatrices, sizeof o.pos);
     std::memcpy(o.nrm, base.normalMatrices, sizeof o.nrm);
+    o.vertices = nullptr;
     if (!pd) continue;
     for (int row = 0; row < 64; ++row) {
       if (!(p.used_slots & (1ull << row))) continue;

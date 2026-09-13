@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include "slippi_record_events.h"
 
 namespace slippi {
 
@@ -18,6 +19,7 @@ uint32_t imm_read(uint32_t size);
 uint32_t gct_load_address();
 uint64_t commands_seen();
 uint64_t replays_written();
+RecordingEvents recording_events(); // snapshot on the simulation thread or after it has stopped
 const std::string& replay_directory();
 const std::string& last_replay_path();   // the .slp most recently written (for the game report upload)
 // Widescreen 16:9 (Slippi's optional code, compiled in both ways). request_* is thread-safe and

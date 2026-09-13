@@ -2,11 +2,24 @@ cmake_minimum_required(VERSION 3.15)
 project(MeleeUnlocked LANGUAGES CXX)
 enable_testing()
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(MELEE_DECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/melee" CACHE PATH
+  "Pinned doldecomp/melee source root (read-only build input)")
+set(MELEE_DOL_PATH "${MELEE_DECOMP_ROOT}/orig/GALE01/sys/main.dol" CACHE FILEPATH
+  "User-provided verified Melee NTSC 1.02 DOL")
+foreach(fobj_input fobj.c fobj.h spline.c)
+  if(NOT EXISTS "${MELEE_DECOMP_ROOT}/src/sysdolphin/baselib/${fobj_input}")
+    message(FATAL_ERROR "Missing ${fobj_input}; set MELEE_DECOMP_ROOT to the pinned decomp source root. See docs/PORTABLE_BUILD.md")
+  endif()
+endforeach()
 set(HOST_FOBJ "${CMAKE_CURRENT_BINARY_DIR}/generated/FObjHost.cpp")
 add_custom_command(OUTPUT "${HOST_FOBJ}"
-  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_fobj_host.py" "${HOST_FOBJ}"
-  DEPENDS tools/generate_fobj_host.py melee/src/sysdolphin/baselib/fobj.c
-          melee/src/sysdolphin/baselib/fobj.h melee/src/sysdolphin/baselib/spline.c)
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_fobj_host.py"
+          "${HOST_FOBJ}" --decomp-root "${MELEE_DECOMP_ROOT}"
+  DEPENDS tools/generate_fobj_host.py tools/port_source_pins.json
+          "${MELEE_DECOMP_ROOT}/src/sysdolphin/baselib/fobj.c"
+          "${MELEE_DECOMP_ROOT}/src/sysdolphin/baselib/fobj.h"
+          "${MELEE_DECOMP_ROOT}/src/sysdolphin/baselib/spline.c"
+  VERBATIM)
 add_library(native_animation STATIC "${HOST_FOBJ}")
 target_include_directories(native_animation PUBLIC native)
 target_compile_features(native_animation PUBLIC cxx_std_14)
@@ -20,16 +33,35 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/native-assets/PlFcAJ.dat")
 endif()
 
 option(MELEE_BUILD_EXPERIMENTAL_PORT "Build the incomplete native recompilation prototype" OFF)
+option(MELEE_BUILD_PORT_HEADLESS "Build the portable offline diagnostic executable" OFF)
+option(MELEE_BUILD_PORT_METAL "Build the macOS Cocoa/Metal/Aurora executable" OFF)
+option(MELEE_BUILD_PORT_TESTS "Build portable port unit tests without generating the game" OFF)
+option(MELEE_BUILD_PORT_TRANSPORT_TESTS "Build explicit IPv4-loopback Slippi transport tests" OFF)
 if(MELEE_BUILD_EXPERIMENTAL_PORT)
   if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "The experimental port requires Windows x64 and MSVC")
   endif()
+endif()
+if(MELEE_BUILD_PORT_METAL AND NOT APPLE)
+  message(FATAL_ERROR "MELEE_BUILD_PORT_METAL requires macOS")
+endif()
+if(MELEE_BUILD_PORT_METAL)
+  enable_language(C OBJC OBJCXX)
+endif()
+if(MELEE_BUILD_EXPERIMENTAL_PORT OR MELEE_BUILD_PORT_HEADLESS OR MELEE_BUILD_PORT_METAL OR MELEE_BUILD_PORT_TESTS OR MELEE_BUILD_PORT_TRANSPORT_TESTS)
   add_subdirectory(port)
 endif()
 add_executable(native_animation_test tests/native_animation_test.cpp)
 target_include_directories(native_animation_test PRIVATE native)
 target_compile_features(native_animation_test PRIVATE cxx_std_14)
 add_test(NAME native_animation COMMAND native_animation_test)
+foreach(native_test native_asset_test packed_animation_test native_animation_test)
+  if(MSVC)
+    target_compile_options(${native_test} PRIVATE /UNDEBUG)
+  else()
+    target_compile_options(${native_test} PRIVATE -UNDEBUG)
+  endif()
+endforeach()
 if(WIN32)
   add_executable(native_viewer native/Viewer.cpp)
   target_link_libraries(native_viewer PRIVATE native_animation)

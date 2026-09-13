@@ -91,6 +91,38 @@ int main() {
   check(solver.stats().paired == 0, "frame gaps invalidate pairing");
   b.sequence = 2; b.vertices[0].pos[0] = 10; solver.set_frames(&a, &b);
   check(solver.stats().paired == 0, "changed geometry cannot reuse a draw identity");
+  b.vertices[0].pos[0] = 0;
+  const uint32_t full_components = gx::VB_HAS_POSMTXIDX | gx::VB_HAS_NRM0 | gx::VB_HAS_COL0 | gx::VB_HAS_COL1 |
+      (0xffu << 1) | (0xffu << 15);
+  a.draws[0].components = b.draws[0].components = full_components;
+  auto geometry_change = [&](auto mutate) {
+    b.vertices = a.vertices;
+    mutate(b.vertices[2]);
+    solver.set_frames(&a, &b);
+    check(solver.stats().paired == 0 && solver.stats().geometry == 1, "every active vertex input guards reuse");
+  };
+  for (int k = 0; k < 3; ++k) {
+    geometry_change([&](gx::Vertex& v) { v.pos[k] = 1; });
+    geometry_change([&](gx::Vertex& v) { v.nrm[k] = 1; });
+  }
+  for (int k = 0; k < 4; ++k) {
+    geometry_change([&](gx::Vertex& v) { v.col0[k] = 1; });
+    geometry_change([&](gx::Vertex& v) { v.col1[k] = 1; });
+  }
+  for (int k = 0; k < 8; ++k) {
+    geometry_change([&](gx::Vertex& v) { v.texmtx[k] = 3; });
+    for (int c = 0; c < 2; ++c) geometry_change([&](gx::Vertex& v) { v.uv[k][c] = 1; });
+  }
+  geometry_change([](gx::Vertex& v) { v.posmtx = 3; });
+  b.vertices = a.vertices;
+  b.vertices[2].pad[0] = 99;
+  solver.set_frames(&a, &b);
+  check(solver.stats().paired == 1, "padding is not geometry");
+  a.draws[0].components = b.draws[0].components = 0;
+  b.draws[0].matrix_index_a = 3;
+  solver.set_frames(&a, &b);
+  check(solver.stats().paired == 0, "default position matrix selection guards reuse");
+  b.draws[0].matrix_index_a = 0;
   b.vertices[0].pos[0] = 0; b.draws[0].xf_regs[0x26] = 1; solver.set_frames(&a, &b);
   check(solver.stats().paired == 0, "orthographic HUD draws retain exact pose");
   float scale2[12] = {2,0,0,0, 0,1,0,0, 0,0,1,0};

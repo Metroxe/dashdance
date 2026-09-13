@@ -1,4 +1,4 @@
-"""C++ emitter: one host function per guest function, Jit64-equivalent semantics."""
+"""C++ emitter: one host function per guest function, explicit portable numeric helpers."""
 from gekko import LOAD_OPS, STORE_OPS
 
 
@@ -158,7 +158,7 @@ class Emitter:
         if op == "subfic":
             return "{ uint32_t a = %s; %s = %s - a; c.ca = (a == 0) || ppc::carry(0u - a, %s); }" % (ra, rd, hexs(f["simm"]), hexs(f["simm"]))
         if op == "mulli":
-            return "%s = (uint32_t)((int32_t)%s * %d);" % (rd, ra, f["simm"])
+            return "%s = %s * %s;" % (rd, ra, hexs(f["simm"]))
         if op == "cmpi":
             return "ppc::cr_set_s(c, %d, (int32_t)%s, %d);" % (f["crfd"], ra, f["simm"])
         if op == "cmpli":
@@ -182,7 +182,7 @@ class Emitter:
         if op in ("twi", "tw"):
             return None
         # ---------------- integer register ops ----------------
-        simple = {"add": "%s + %s", "subf": "%s - %s", "mullw": "(uint32_t)((int32_t)%s * (int32_t)%s)",
+        simple = {"add": "%s + %s", "subf": "%s - %s", "mullw": "%s * %s",
                   "and": "%s & %s", "or": "%s | %s", "xor": "%s ^ %s", "nand": "~(%s & %s)",
                   "nor": "~(%s | %s)", "eqv": "~(%s ^ %s)", "andc": "%s & ~%s", "orc": "%s | ~%s"}
         if op in ("add", "subf", "mullw"):
@@ -193,7 +193,7 @@ class Emitter:
         if op == "neg":
             return "%s = 0u - %s;%s" % (rd, ra, self.rc(ins, rd))
         if op == "mulhw":
-            return "%s = (uint32_t)(((int64_t)(int32_t)%s * (int64_t)(int32_t)%s) >> 32);%s" % (rd, ra, rb, self.rc(ins, rd))
+            return "%s = ppc::mulhw(%s, %s);%s" % (rd, ra, rb, self.rc(ins, rd))
         if op == "mulhwu":
             return "%s = (uint32_t)(((uint64_t)%s * (uint64_t)%s) >> 32);%s" % (rd, ra, rb, self.rc(ins, rd))
         if op == "divw":
@@ -234,13 +234,13 @@ class Emitter:
             return "%s = ppc::srawi(c, %s, %d);%s" % (ra, rs, f["sh"], self.rc(ins, ra))
         if op == "rlwinm":
             m = self._mask(f["mb"], f["me"])
-            return "%s = _rotl(%s, %d) & %s;%s" % (ra, rs, f["sh"], hexs(m), self.rc(ins, ra))
+            return "%s = ppc::rotl32(%s, %d) & %s;%s" % (ra, rs, f["sh"], hexs(m), self.rc(ins, ra))
         if op == "rlwnm":
             m = self._mask(f["mb"], f["me"])
-            return "%s = _rotl(%s, %s & 31) & %s;%s" % (ra, rs, rb, hexs(m), self.rc(ins, ra))
+            return "%s = ppc::rotl32(%s, %s & 31) & %s;%s" % (ra, rs, rb, hexs(m), self.rc(ins, ra))
         if op == "rlwimi":
             m = self._mask(f["mb"], f["me"])
-            return "%s = (%s & %s) | (_rotl(%s, %d) & %s);%s" % (ra, ra, hexs(~m), rs, f["sh"], hexs(m), self.rc(ins, ra))
+            return "%s = (%s & %s) | (ppc::rotl32(%s, %d) & %s);%s" % (ra, ra, hexs(~m), rs, f["sh"], hexs(m), self.rc(ins, ra))
         # ---------------- loads/stores ----------------
         load_kind = "a" if op.startswith("lha") else op[1:2]
         if op in ("lwz", "lbz", "lhz", "lha"):
@@ -512,13 +512,13 @@ class Emitter:
         A0, A1, B0, B1, C0, C1 = F0(a), F1(a), F0(b), F1(b), F0(cc), F1(cc)
         # double precision scalar (ps0 only)
         if op == "fadd":
-            return "%s = %s + %s;" % (D0, A0, B0)
+            return "%s = ppc::fadd(%s, %s);" % (D0, A0, B0)
         if op == "fsub":
-            return "%s = %s - %s;" % (D0, A0, B0)
+            return "%s = ppc::fsub(%s, %s);" % (D0, A0, B0)
         if op == "fmul":
-            return "%s = %s * %s;" % (D0, A0, C0)
+            return "%s = ppc::fmul(%s, %s);" % (D0, A0, C0)
         if op == "fdiv":
-            return "%s = %s / %s;" % (D0, A0, B0)
+            return "%s = ppc::fdiv(%s, %s);" % (D0, A0, B0)
         if op == "fmadd":
             return "%s = ppc::fmadd(%s, %s, %s);" % (D0, A0, C0, B0)
         if op == "fmsub":
@@ -529,21 +529,21 @@ class Emitter:
             return "%s = ppc::fnmsub(%s, %s, %s);" % (D0, A0, C0, B0)
         # single precision scalar (result duplicated to ps1)
         if op == "fadds":
-            return "%s = %s = ppc::fs(%s + %s);" % (D0, D1, A0, B0)
+            return "%s = %s = ppc::fs(ppc::fadd(%s, %s));" % (D0, D1, A0, B0)
         if op == "fsubs":
-            return "%s = %s = ppc::fs(%s - %s);" % (D0, D1, A0, B0)
+            return "%s = %s = ppc::fs(ppc::fsub(%s, %s));" % (D0, D1, A0, B0)
         if op == "fmuls":
-            return "%s = %s = ppc::fs(%s * ppc::f25(%s));" % (D0, D1, A0, C0)
+            return "%s = %s = ppc::fs(ppc::fmul(%s, ppc::f25(%s)));" % (D0, D1, A0, C0)
         if op == "fdivs":
-            return "%s = %s = ppc::fs(%s / %s);" % (D0, D1, A0, B0)
+            return "%s = %s = ppc::fs(ppc::fdiv(%s, %s));" % (D0, D1, A0, B0)
         if op == "fmadds":
-            return "%s = %s = ppc::fs(ppc::fmadd(%s, ppc::f25(%s), %s));" % (D0, D1, A0, C0, B0)
+            return "%s = %s = ppc::fmadds(%s, ppc::f25(%s), %s);" % (D0, D1, A0, C0, B0)
         if op == "fmsubs":
-            return "%s = %s = ppc::fs(ppc::fmsub(%s, ppc::f25(%s), %s));" % (D0, D1, A0, C0, B0)
+            return "%s = %s = ppc::fmsubs(%s, ppc::f25(%s), %s);" % (D0, D1, A0, C0, B0)
         if op == "fnmadds":
-            return "%s = %s = ppc::fs(ppc::fnmadd(%s, ppc::f25(%s), %s));" % (D0, D1, A0, C0, B0)
+            return "%s = %s = ppc::fnmadds(%s, ppc::f25(%s), %s);" % (D0, D1, A0, C0, B0)
         if op == "fnmsubs":
-            return "%s = %s = ppc::fs(ppc::fnmsub(%s, ppc::f25(%s), %s));" % (D0, D1, A0, C0, B0)
+            return "%s = %s = ppc::fnmsubs(%s, ppc::f25(%s), %s);" % (D0, D1, A0, C0, B0)
         if op == "fres":
             return "%s = %s = ppc::fres(%s);" % (D0, D1, B0)
         if op == "frsqrte":
@@ -573,43 +573,43 @@ class Emitter:
             for i in range(8):
                 if f["fm"] & (0x80 >> i):
                     m |= 0xF << (28 - 4 * i)
-            return "c.fpscr = (c.fpscr & %s) | ((uint32_t)%s & %s); ppc::update_mxcsr(c);" % (hexs(~m), U0(b), hexs(m))
+            return "c.fpscr = (c.fpscr & %s) | ((uint32_t)%s & %s); ppc::update_fp_environment(c);" % (hexs(~m), U0(b), hexs(m))
         if op == "mtfsb0":
-            return "c.fpscr &= ~%s; ppc::update_mxcsr(c);" % hexs(0x80000000 >> f["crbd"])
+            return "c.fpscr &= ~%s; ppc::update_fp_environment(c);" % hexs(0x80000000 >> f["crbd"])
         if op == "mtfsb1":
-            return "c.fpscr |= %s; ppc::update_mxcsr(c);" % hexs(0x80000000 >> f["crbd"])
+            return "c.fpscr |= %s; ppc::update_fp_environment(c);" % hexs(0x80000000 >> f["crbd"])
         if op == "mtfsfi":
             sh = 28 - 4 * f["crfd"]
-            return "c.fpscr = (c.fpscr & ~%s) | (%su << %d); ppc::update_mxcsr(c);" % (hexs(0xF << sh), f["imm"], sh)
+            return "c.fpscr = (c.fpscr & ~%s) | (%su << %d); ppc::update_fp_environment(c);" % (hexs(0xF << sh), f["imm"], sh)
         if op == "mcrfs":
             return "c.cr[%d] = (uint8_t)((c.fpscr >> %d) & 15);" % (f["crfd"], 28 - 4 * f["crfs"])
         # ---------------- paired single ----------------
         if op == "ps_add":
-            return "{ double x = %s + %s, y = %s + %s; %s = ppc::fs(x); %s = ppc::fs(y); }" % (A0, B0, A1, B1, D0, D1)
+            return "{ double x = ppc::fadd(%s, %s), y = ppc::fadd(%s, %s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (A0, B0, A1, B1, D0, D1)
         if op == "ps_sub":
-            return "{ double x = %s - %s, y = %s - %s; %s = ppc::fs(x); %s = ppc::fs(y); }" % (A0, B0, A1, B1, D0, D1)
+            return "{ double x = ppc::fsub(%s, %s), y = ppc::fsub(%s, %s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (A0, B0, A1, B1, D0, D1)
         if op == "ps_mul":
-            return "{ double x = %s * ppc::f25(%s), y = %s * ppc::f25(%s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (A0, C0, A1, C1, D0, D1)
+            return "{ double x = ppc::fmul(%s, ppc::f25(%s)), y = ppc::fmul(%s, ppc::f25(%s)); %s = ppc::fs(x); %s = ppc::fs(y); }" % (A0, C0, A1, C1, D0, D1)
         if op == "ps_div":
-            return "{ double x = %s / %s, y = %s / %s; %s = ppc::fs(x); %s = ppc::fs(y); }" % (A0, B0, A1, B1, D0, D1)
+            return "{ double x = ppc::fdiv(%s, %s), y = ppc::fdiv(%s, %s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (A0, B0, A1, B1, D0, D1)
         if op == "ps_muls0":
-            return "{ double k = ppc::f25(%s); double x = %s * k, y = %s * k; %s = ppc::fs(x); %s = ppc::fs(y); }" % (C0, A0, A1, D0, D1)
+            return "{ double k = ppc::f25(%s); double x = ppc::fmul(%s, k), y = ppc::fmul(%s, k); %s = ppc::fs(x); %s = ppc::fs(y); }" % (C0, A0, A1, D0, D1)
         if op == "ps_muls1":
-            return "{ double k = ppc::f25(%s); double x = %s * k, y = %s * k; %s = ppc::fs(x); %s = ppc::fs(y); }" % (C1, A0, A1, D0, D1)
+            return "{ double k = ppc::f25(%s); double x = ppc::fmul(%s, k), y = ppc::fmul(%s, k); %s = ppc::fs(x); %s = ppc::fs(y); }" % (C1, A0, A1, D0, D1)
         if op in ("ps_madd", "ps_msub", "ps_nmadd", "ps_nmsub"):
-            fn = "ppc::f" + op[3:]
+            fn = "ppc::f" + op[3:] + "s"
             return "{ double x = %s(%s, ppc::f25(%s), %s), y = %s(%s, ppc::f25(%s), %s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (
                 fn, A0, C0, B0, fn, A1, C1, B1, D0, D1)
         if op == "ps_madds0":
-            return "{ double k = ppc::f25(%s); double x = ppc::fmadd(%s, k, %s), y = ppc::fmadd(%s, k, %s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (
+            return "{ double k = ppc::f25(%s); double x = ppc::fmadds(%s, k, %s), y = ppc::fmadds(%s, k, %s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (
                 C0, A0, B0, A1, B1, D0, D1)
         if op == "ps_madds1":
-            return "{ double k = ppc::f25(%s); double x = ppc::fmadd(%s, k, %s), y = ppc::fmadd(%s, k, %s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (
+            return "{ double k = ppc::f25(%s); double x = ppc::fmadds(%s, k, %s), y = ppc::fmadds(%s, k, %s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (
                 C1, A0, B0, A1, B1, D0, D1)
         if op == "ps_sum0":
-            return "{ double x = %s + %s, y = %s; %s = ppc::fs(x); %s = ppc::fs(y); }" % (A0, B1, C1, D0, D1)
+            return "{ double x = ppc::fadd(%s, %s), y = %s; %s = ppc::fs(x); %s = ppc::fs(y); }" % (A0, B1, C1, D0, D1)
         if op == "ps_sum1":
-            return "{ double x = %s, y = %s + %s; %s = ppc::fs(x); %s = ppc::fs(y); }" % (C0, A0, B1, D0, D1)
+            return "{ double x = %s, y = ppc::fadd(%s, %s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (C0, A0, B1, D0, D1)
         if op == "ps_res":
             return "{ double x = ppc::fres(%s), y = ppc::fres(%s); %s = ppc::fs(x); %s = ppc::fs(y); }" % (B0, B1, D0, D1)
         if op == "ps_rsqrte":

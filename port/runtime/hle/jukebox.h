@@ -7,6 +7,9 @@
 #include <cstdint>
 
 namespace slippi::jukebox {
+// Lifecycle and command methods run on the EXI/host owner, never on the decoder.
+void init();
+void shutdown();                                       // cancel pending work and join the decoder
 void start_song(uint32_t disc_offset, uint32_t size);   // CMD_PLAY_MUSIC
 void stop();                                            // CMD_STOP_MUSIC
 void set_melee_volume(uint8_t volume);                  // CMD_CHANGE_MUSIC_VOLUME (0..254)

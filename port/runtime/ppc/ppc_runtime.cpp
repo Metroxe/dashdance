@@ -4,10 +4,13 @@
 #include "functions.h"
 #include "host.h"
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -15,6 +18,153 @@ namespace ppc {
 
 static std::vector<Fn> g_dispatch;   // indexed by (addr - RAM_BASE) / 4
 static uint8_t g_locked_cache[LC_SIZE];
+static std::atomic<bool> g_interpreter_allowed{false};
+static std::mutex g_fallback_mutex;
+static AotDiagnostics g_aot_diagnostics;
+
+void set_interpreter_allowed(bool allowed) { g_interpreter_allowed.store(allowed); }
+bool interpreter_allowed() { return g_interpreter_allowed.load(); }
+AotDiagnostics aot_diagnostics() {
+  std::lock_guard<std::mutex> lock(g_fallback_mutex);
+  AotDiagnostics result = g_aot_diagnostics;
+  result.strict = !interpreter_allowed();
+  interpreter_stats(&result.interpreted_calls, &result.interpreted_instructions);
+  return result;
+}
+void log_aot_diagnostics() {
+  const auto d = aot_diagnostics();
+  host::log("[aot] strict=%s missing-target attempts=%llu interpreted calls=%llu instructions=%llu",
+            d.strict ? "yes" : "no", (unsigned long long)d.missing_attempts,
+            (unsigned long long)d.interpreted_calls, (unsigned long long)d.interpreted_instructions);
+  for (size_t i = 0; i < d.missing_count; ++i)
+    host::log("[aot] missing %08X calls=%llu", d.missing[i].addr,
+              (unsigned long long)d.missing[i].calls);
+  if (d.unrecorded_attempts)
+    host::log("[aot] additional target attempts=%llu (bounded table full; not a unique-target count)",
+              (unsigned long long)d.unrecorded_attempts);
+  host::log("[aot] interpreter instruction visits=%llu pc-sequence-fnv1a64=%016llX transfers=%llu transfer-sequence-fnv1a64=%016llX",
+            (unsigned long long)d.instruction_visits, (unsigned long long)d.pc_sequence_hash,
+            (unsigned long long)d.transfer_count, (unsigned long long)d.transfer_sequence_hash);
+  for (uint32_t i = 0; i < d.pc_count; ++i) {
+    const auto& p = d.pcs[i];
+    host::log("[aot] pc=%08X first=%08X last=%08X visits=%llu code-changes=%llu", p.pc,
+              p.first_word, p.last_word, (unsigned long long)p.visits, (unsigned long long)p.code_changes);
+  }
+  if (d.unrecorded_pc_visits)
+    host::log("[aot] unsampled PC visits=%llu (bounded samples; not a unique-PC count)",
+              (unsigned long long)d.unrecorded_pc_visits);
+  for (uint32_t i = 0; i < d.transfer_sample_count; ++i) {
+    const auto& t = d.transfers[i];
+    host::log("[aot] transfer=%u from=%08X to=%08X", uint32_t(t.kind), t.from, t.to);
+  }
+  host::log("[aot] module-load events=%llu retained-identities=%u capacity=%zu dropped-events=%llu",
+            (unsigned long long)d.loaded_module_records, d.module_count, d.modules.size(),
+            (unsigned long long)d.unrecorded_modules);
+  for (uint32_t i = 0; i < d.module_count; ++i) {
+    const auto& module = d.modules[i];
+    host::log("[aot] loaded=%s addr=%08X bytes=%u loads=%llu first-event=%llu last-event=%llu name-truncated=%s host-supplied-sha256=%s",
+              module.name, module.addr, module.size, (unsigned long long)module.loads,
+              (unsigned long long)module.first_event, (unsigned long long)module.last_event,
+              module.name_truncated ? "yes" : "no", module.sha256_valid ? module.sha256 : "unverified");
+  }
+}
+void record_interpreter_entry(Context& c, uint32_t addr) {
+  {
+    std::lock_guard<std::mutex> lock(g_fallback_mutex);
+    auto& d = g_aot_diagnostics;
+    ++d.missing_attempts;
+    size_t i = 0;
+    for (; i < d.missing_count; ++i) {
+      if (d.missing[i].addr == addr) { ++d.missing[i].calls; break; }
+    }
+    if (i == d.missing_count) {
+      if (d.missing_count < d.missing.size()) {
+        d.missing[d.missing_count++] = {addr, c.lr, 1};
+        host::log("[aot] missing target %08X lr=%08X policy=%s", addr, c.lr,
+                  interpreter_allowed() ? "diagnostic interpreter" : "strict stop");
+      } else if (++d.unrecorded_attempts == 1) {
+        host::log("[aot] missing-target table full; further new-target logs suppressed");
+      }
+    }
+  }
+  if (!interpreter_allowed()) {
+    log_aot_diagnostics();
+    fatal(c, "strict AOT: target has no native translation", addr);
+  }
+}
+
+static void hash_word(uint64_t& hash, uint32_t value) {
+  for (int shift = 24; shift >= 0; shift -= 8) {
+    hash ^= (value >> shift) & 255;
+    hash *= UINT64_C(1099511628211);
+  }
+}
+void record_interpreter_instruction(uint32_t pc, uint32_t word) {
+  std::lock_guard<std::mutex> lock(g_fallback_mutex);
+  auto& d = g_aot_diagnostics;
+  ++d.instruction_visits;
+  hash_word(d.pc_sequence_hash, pc);
+  hash_word(d.pc_sequence_hash, word);
+  for (uint32_t i = 0; i < d.pc_count; ++i) {
+    if (d.pcs[i].pc == pc) {
+      auto& sample = d.pcs[i];
+      ++sample.visits;
+      if (sample.last_word != word) { sample.last_word = word; ++sample.code_changes; }
+      return;
+    }
+  }
+  if (d.pc_count < d.pcs.size()) d.pcs[d.pc_count++] = {pc, word, word, 1, 0};
+  else ++d.unrecorded_pc_visits;
+}
+void record_interpreter_transfer(uint32_t from, uint32_t to, AotTransferKind kind) {
+  std::lock_guard<std::mutex> lock(g_fallback_mutex);
+  auto& d = g_aot_diagnostics;
+  ++d.transfer_count;
+  hash_word(d.transfer_sequence_hash, from);
+  hash_word(d.transfer_sequence_hash, to);
+  hash_word(d.transfer_sequence_hash, uint32_t(kind));
+  if (d.transfer_sample_count < d.transfers.size())
+    d.transfers[d.transfer_sample_count++] = {from, to, kind};
+}
+void record_loaded_module(const char* name, uint32_t addr, uint32_t size, const char* sha256) {
+  std::lock_guard<std::mutex> lock(g_fallback_mutex);
+  auto& d = g_aot_diagnostics;
+  const uint64_t event = ++d.loaded_module_records;
+  AotLoadedModule module;
+  const char* full_name = name ? name : "";
+  module.name_truncated = std::strlen(full_name) >= sizeof(module.name);
+  std::snprintf(module.name, sizeof(module.name), "%s", full_name);
+  module.addr = addr;
+  module.size = size;
+  bool valid = sha256 && std::strlen(sha256) == 64;
+  for (unsigned i = 0; valid && i < 64; ++i) {
+    const char ch = sha256[i];
+    valid = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
+    if (valid) module.sha256[i] = (ch >= 'A' && ch <= 'F') ? char(ch + ('a' - 'A')) : ch;
+  }
+  module.sha256_valid = valid;
+  if (!valid) module.sha256[0] = '\0';
+  module.loads = 1;
+  module.first_event = module.last_event = event;
+  // Unknown digests and incomplete names cannot establish identical content.
+  // Do not let truncation or missing provenance silently collapse changed loads.
+  if (valid && module.name[0] && !module.name_truncated) {
+    for (uint32_t i = 0; i < d.module_count; ++i) {
+      auto& retained = d.modules[i];
+      if (retained.sha256_valid && !retained.name_truncated && retained.addr == addr &&
+          retained.size == size && std::strcmp(retained.name, module.name) == 0 &&
+          std::strcmp(retained.sha256, module.sha256) == 0) {
+        ++retained.loads;
+        retained.last_event = event;
+        return;
+      }
+    }
+  }
+  // Search existing identities even after capacity is reached: their later
+  // duplicates still count. New/changed identities are explicitly dropped.
+  if (d.module_count == d.modules.size()) { ++d.unrecorded_modules; return; }
+  d.modules[d.module_count++] = module;
+}
 
 // Covers all of RAM: Gecko caves live below .text (bootloader at 0x800028B8) and in the heap
 // (the main code table the game loads), and their subroutines are called through pointers.
@@ -29,7 +179,7 @@ void init_dispatch() {
 
 Fn lookup(uint32_t addr) {
   uint32_t off = addr - RAM_BASE;
-  if (off >= RAM_SIZE || (addr & 3)) return nullptr;
+  if (off >= RAM_SIZE || (addr & 3) || off / 4 >= g_dispatch.size()) return nullptr;
   return g_dispatch[off / 4];
 }
 
@@ -72,14 +222,14 @@ void longjmp_restore(Context& c, uint8_t* m, uint32_t buf, uint32_t val) {
   mtcrf(c, 0xFFu, ld32(c, m, buf + 4));
   c.r[1] = ld32(c, m, buf + 8);
   c.r[2] = ld32(c, m, buf + 12);
-  for (int i = 13, ea = (int)buf + 20; i < 32; ++i, ea += 4) c.r[i] = ld32(c, m, (uint32_t)ea);
+  for (uint32_t i = 13, ea = buf + 20; i < 32; ++i, ea += 4) c.r[i] = ld32(c, m, ea);
   for (int i = 14; i < 32; ++i) c.f[i].u0 = ld64(c, m, buf + 96 + 8 * (uint32_t)(i - 14));
   c.f[0].u0 = ld64(c, m, buf + 240);
   c.fpscr = (uint32_t)c.f[0].u0; update_mxcsr(c);
   c.r[3] = val ? val : 1u;
 }
 
-void fatal(Context& c, const char* what, uint32_t a) {
+[[noreturn]] void fatal(Context& c, const char* what, uint32_t a) {
   host::log("recent function entries (oldest first):");
   for (uint32_t i = 0; i < 64; ++i) {
     uint32_t pc = c.trace[(c.trace_pos + i) & 63];
@@ -117,13 +267,8 @@ void syscall(Context& c, uint8_t* m) {
   // Melee only uses sc for cache maintenance from OS code; nothing to do.
 }
 
-void update_mxcsr(Context& c) {
-  unsigned csr = _mm_getcsr() & ~(0x6000u | 0x8000u | 0x0040u);
-  unsigned rn = c.fpscr & 3;                      // PPC RN: 0 nearest,1 zero,2 +inf,3 -inf
-  static const unsigned x86_rc[4] = {0x0000, 0x6000, 0x4000, 0x2000};
-  csr |= x86_rc[rn];
-  if (c.fpscr & 4) csr |= 0x8000u | 0x0040u;      // NI -> FTZ | DAZ, as Jit64 does
-  _mm_setcsr(csr);
+void update_fp_environment(Context& c) {
+  set_fp_environment(c.fpscr, fp_profile());
 }
 
 void dcbz(Context& c, uint8_t* m, uint32_t ea) {
@@ -188,8 +333,12 @@ static const float quantize_table[] = {
 };
 
 template <typename T>
-static T scale_clamp(double ps, uint32_t st_scale) {
+static T scale_clamp(Context& c, double ps, uint32_t st_scale) {
   float conv = (float)ps * quantize_table[st_scale];
+  // Pinned interpreter's NaN-to-integer cast is not a defined C++ oracle.
+  // Stop explicitly until a hardware-verified rule is selected, rather than
+  // invoking UB or silently choosing different ARM/x86 saturation values.
+  if (std::isnan(conv)) { fatal(c, "psq_st integer NaN conversion is unverified", st_scale); return T(0); }
   float lo = (float)std::numeric_limits<T>::min(), hi = (float)std::numeric_limits<T>::max();
   if (conv < lo) conv = lo;
   if (conv > hi) conv = hi;
@@ -202,10 +351,10 @@ void psq_load(Context& c, uint8_t* m, uint32_t ea, uint32_t rd, uint32_t w, uint
   uint32_t type = (gqr >> 16) & 7, scale = (gqr >> 24) & 63;
   float ps0, ps1;
   switch (type) {
-    case 0:  // float
-      if (w) { uint32_t v = ld32(c, m, ea); std::memcpy(&ps0, &v, 4); ps1 = 1.0f; }
-      else { uint32_t a = ld32(c, m, ea), b = ld32(c, m, ea + 4); std::memcpy(&ps0, &a, 4); std::memcpy(&ps1, &b, 4); }
-      break;
+    case 0:  // Preserve load-conversion payloads and subnormals independently of host FZ.
+      c.f[rd].ps0 = float_bits_to_double(ld32(c, m, ea));
+      c.f[rd].ps1 = w ? 1.0 : float_bits_to_double(ld32(c, m, ea + 4));
+      return;
     case 4:  // u8
       if (w) { ps0 = (float)(uint8_t)ld8(c, m, ea) * dequantize_table[scale]; ps1 = 1.0f; }
       else { uint32_t v = ld16(c, m, ea); ps0 = (float)(uint8_t)(v >> 8) * dequantize_table[scale]; ps1 = (float)(uint8_t)v * dequantize_table[scale]; }
@@ -235,110 +384,38 @@ void psq_store(Context& c, uint8_t* m, uint32_t ea, uint32_t rs, uint32_t w, uin
   double ps0 = c.f[rs].ps0, ps1 = c.f[rs].ps1;
   switch (type) {
     case 0: {
-      uint32_t a = double_to_float_bits(ps0);
+      uint32_t a = double_to_float_bits_ftz(ps0);
       if (w) st32(c, m, ea, a);
-      else { st32(c, m, ea, a); st32(c, m, ea + 4, double_to_float_bits(ps1)); }
+      else { st32(c, m, ea, a); st32(c, m, ea + 4, double_to_float_bits_ftz(ps1)); }
       break;
     }
     case 4: {
-      uint8_t a = (uint8_t)scale_clamp<uint8_t>(ps0, scale);
+      uint8_t a = (uint8_t)scale_clamp<uint8_t>(c, ps0, scale);
       if (w) st8(c, m, ea, a);
-      else st16(c, m, ea, ((uint32_t)a << 8) | (uint8_t)scale_clamp<uint8_t>(ps1, scale));
+      else st16(c, m, ea, ((uint32_t)a << 8) | (uint8_t)scale_clamp<uint8_t>(c, ps1, scale));
       break;
     }
     case 5: {
-      uint16_t a = (uint16_t)scale_clamp<uint16_t>(ps0, scale);
+      uint16_t a = (uint16_t)scale_clamp<uint16_t>(c, ps0, scale);
       if (w) st16(c, m, ea, a);
-      else st32(c, m, ea, ((uint32_t)a << 16) | (uint16_t)scale_clamp<uint16_t>(ps1, scale));
+      else st32(c, m, ea, ((uint32_t)a << 16) | (uint16_t)scale_clamp<uint16_t>(c, ps1, scale));
       break;
     }
     case 6: {
-      uint8_t a = (uint8_t)scale_clamp<int8_t>(ps0, scale);
+      uint8_t a = (uint8_t)scale_clamp<int8_t>(c, ps0, scale);
       if (w) st8(c, m, ea, a);
-      else st16(c, m, ea, ((uint32_t)a << 8) | (uint8_t)scale_clamp<int8_t>(ps1, scale));
+      else st16(c, m, ea, ((uint32_t)a << 8) | (uint8_t)scale_clamp<int8_t>(c, ps1, scale));
       break;
     }
     case 7: {
-      uint16_t a = (uint16_t)scale_clamp<int16_t>(ps0, scale);
+      uint16_t a = (uint16_t)scale_clamp<int16_t>(c, ps0, scale);
       if (w) st16(c, m, ea, a);
-      else st32(c, m, ea, ((uint32_t)a << 16) | (uint16_t)scale_clamp<int16_t>(ps1, scale));
+      else st32(c, m, ea, ((uint32_t)a << 16) | (uint16_t)scale_clamp<int16_t>(c, ps1, scale));
       break;
     }
     default:
       fatal(c, "psq_st invalid GQR type", gqr);
   }
-}
-
-// ---- fres / frsqrte (Dolphin Common/MathUtil.cpp) ----
-static const int frsqrte_expected_base[] = {
-  0x3ffa000, 0x3c29000, 0x38aa000, 0x3572000, 0x3279000, 0x2fb7000, 0x2d26000, 0x2ac0000,
-  0x2881000, 0x2665000, 0x2468000, 0x2287000, 0x20c1000, 0x1f12000, 0x1d79000, 0x1bf4000,
-  0x1a7e800, 0x17cb800, 0x1552800, 0x130c000, 0x10f2000, 0x0eff000, 0x0d2e000, 0x0b7c000,
-  0x09e5000, 0x0867000, 0x06ff000, 0x05ab800, 0x046a000, 0x0339800, 0x0218800, 0x0105800,
-};
-static const int frsqrte_expected_dec[] = {
-  0x7a4, 0x700, 0x670, 0x5f2, 0x584, 0x524, 0x4cc, 0x47e, 0x43a, 0x3fa, 0x3c2, 0x38e,
-  0x35e, 0x332, 0x30a, 0x2e6, 0x568, 0x4f3, 0x48d, 0x435, 0x3e7, 0x3a2, 0x365, 0x32e,
-  0x2fc, 0x2d0, 0x2a8, 0x283, 0x261, 0x243, 0x226, 0x20b,
-};
-
-double frsqrte(double val) {
-  int64_t vali; std::memcpy(&vali, &val, 8);
-  int64_t mantissa = vali & ((1LL << 52) - 1);
-  int64_t sign = vali & (1LL << 63);
-  int64_t exponent = vali & (0x7FFLL << 52);
-  if (mantissa == 0 && exponent == 0)
-    return sign ? -std::numeric_limits<double>::infinity() : std::numeric_limits<double>::infinity();
-  if (exponent == (0x7FFLL << 52)) {
-    if (mantissa == 0) return sign ? std::numeric_limits<double>::quiet_NaN() : 0.0;
-    return 0.0 + val;
-  }
-  if (sign) return std::numeric_limits<double>::quiet_NaN();
-  if (!exponent) {
-    do { exponent -= 1LL << 52; mantissa <<= 1; } while (!(mantissa & (1LL << 52)));
-    mantissa &= (1LL << 52) - 1;
-    exponent += 1LL << 52;
-  }
-  bool odd_exponent = !(exponent & (1LL << 52));
-  exponent = ((0x3FFLL << 52) - ((exponent - (0x3FELL << 52)) / 2)) & (0x7FFLL << 52);
-  int i = (int)(mantissa >> 37);
-  vali = sign | exponent;
-  int index = i / 2048 + (odd_exponent ? 16 : 0);
-  vali |= (int64_t)(frsqrte_expected_base[index] - frsqrte_expected_dec[index] * (i % 2048)) << 26;
-  double out; std::memcpy(&out, &vali, 8);
-  return out;
-}
-
-static const int fres_expected_base[] = {
-  0x7ff800, 0x783800, 0x70ea00, 0x6a0800, 0x638800, 0x5d6200, 0x579000, 0x520800,
-  0x4cc800, 0x47ca00, 0x430800, 0x3e8000, 0x3a2c00, 0x360800, 0x321400, 0x2e4a00,
-  0x2aa800, 0x272c00, 0x23d600, 0x209e00, 0x1d8800, 0x1a9000, 0x17ae00, 0x14f800,
-  0x124400, 0x0fbe00, 0x0d3800, 0x0ade00, 0x088400, 0x065000, 0x041c00, 0x020c00,
-};
-static const int fres_expected_dec[] = {
-  0x3e1, 0x3a7, 0x371, 0x340, 0x313, 0x2ea, 0x2c4, 0x2a0, 0x27f, 0x261, 0x245, 0x22a,
-  0x212, 0x1fb, 0x1e5, 0x1d1, 0x1be, 0x1ac, 0x19b, 0x18b, 0x17c, 0x16e, 0x15b, 0x15b,
-  0x143, 0x143, 0x12d, 0x12d, 0x11a, 0x11a, 0x108, 0x106,
-};
-
-double fres(double val) {
-  int64_t vali; std::memcpy(&vali, &val, 8);
-  int64_t mantissa = vali & ((1LL << 52) - 1);
-  int64_t sign = vali & (1LL << 63);
-  int64_t exponent = vali & (0x7FFLL << 52);
-  if (mantissa == 0 && exponent == 0) return std::copysign(std::numeric_limits<double>::infinity(), val);
-  if (exponent == (0x7FFLL << 52)) {
-    if (mantissa == 0) return std::copysign(0.0, val);
-    return 0.0 + val;
-  }
-  if (exponent < (895LL << 52)) return std::copysign((double)std::numeric_limits<float>::max(), val);
-  if (exponent >= (1149LL << 52)) return std::copysign(0.0, val);
-  exponent = (0x7FDLL << 52) - exponent;
-  int i = (int)(mantissa >> 37);
-  vali = sign | exponent;
-  vali |= (int64_t)(fres_expected_base[i / 1024] - (fres_expected_dec[i / 1024] * (i % 1024) + 1) / 2) << 29;
-  double out; std::memcpy(&out, &vali, 8);
-  return out;
 }
 
 }  // namespace ppc

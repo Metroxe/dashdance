@@ -11,6 +11,7 @@ instruction-level patches the recompiler applies ahead of time:
   * hooks and C0 caves outside any function become synthetic functions.
 The guest still runs the real handler at boot, so RAM ends up exactly as under Dolphin.
 """
+import hashlib
 import re
 import struct
 
@@ -34,33 +35,34 @@ class GeckoCode:
 def load_ini(path):
     """Parses [Gecko] and [Gecko_Enabled] like Dolphin's GeckoCodeConfig::LoadCodes."""
     codes, enabled, section, current = [], set(), None, None
-    for raw in open(path, encoding="utf-8", errors="replace"):
-        line = raw.strip()
-        if not line:
-            continue
-        if line.startswith("["):
-            section = line
-            current = None
-            continue
-        if section == "[Gecko_Enabled]":
+    with open(path, encoding="utf-8", errors="replace") as source:
+        for raw in source:
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("["):
+                section = line
+                current = None
+                continue
+            if section == "[Gecko_Enabled]":
+                if line.startswith("$"):
+                    enabled.add(line[1:].strip())
+                continue
+            if section != "[Gecko]":
+                continue
             if line.startswith("$"):
-                enabled.add(line[1:].strip())
-            continue
-        if section != "[Gecko]":
-            continue
-        if line.startswith("$"):
-            name = line[1:]
-            bracket = name.find("[")
-            if bracket >= 0:
-                name = name[:bracket]
-            current = GeckoCode(name.strip())
-            codes.append(current)
-            continue
-        if line.startswith("*") or current is None:
-            continue
-        m = re.match(r"^([0-9A-Fa-f]{8})\s+([0-9A-Fa-f]{8})", line)
-        if m:
-            current.codes.append((int(m.group(1), 16), int(m.group(2), 16)))
+                name = line[1:]
+                bracket = name.find("[")
+                if bracket >= 0:
+                    name = name[:bracket]
+                current = GeckoCode(name.strip())
+                codes.append(current)
+                continue
+            if line.startswith("*") or current is None:
+                continue
+            m = re.match(r"^([0-9A-Fa-f]{8})\s+([0-9A-Fa-f]{8})", line)
+            if m:
+                current.codes.append((int(m.group(1), 16), int(m.group(2), 16)))
     for code in codes:
         code.enabled = code.name in enabled or code.optional is not None
     return codes
@@ -85,11 +87,43 @@ def generate_gct(codes, include_optional=True):
 
 
 class Hook:
-    __slots__ = ("hook", "cave_addr", "words", "optional")
+    __slots__ = ("hook", "cave_addr", "words", "optional", "absorbed_by")
 
     def __init__(self, hook, cave_addr, words):
         self.hook, self.cave_addr, self.words = hook, cave_addr, words
         self.optional = None   # flag name when the hook belongs to a run-time optional code
+        self.absorbed_by = None  # HLE name after a pinned payload is validated
+
+
+def canonical_hook_body(hook):
+    """Relocation-independent C2 body used for equality and identity checks.
+
+    The Gecko handler replaces the final word with a branch back to hook+4, so
+    that word differs when byte-identical codes occupy different table slots.
+    """
+    return tuple(hook.words[:-1])
+
+
+def hook_fingerprint(hook):
+    body = canonical_hook_body(hook)
+    payload = struct.pack(">%dI" % len(body), *body) if body else b""
+    return hashlib.sha256(payload).hexdigest()
+
+
+def canonicalize_hooks(hooks):
+    """Return later-winner hooks and (address, identical-body) duplicates."""
+    winners = {}
+    duplicates = []
+    for hook in hooks:
+        previous = winners.get(hook.hook)
+        if previous is not None:
+            duplicates.append((
+                hook.hook,
+                canonical_hook_body(previous) == canonical_hook_body(hook)
+                and previous.optional == hook.optional,
+            ))
+        winners[hook.hook] = hook
+    return list(winners.values()), duplicates
 
 
 class Cave:

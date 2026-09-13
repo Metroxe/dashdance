@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 #include "ppc.h"
+#include "scene_trace.h"
+#include "fatal_boundary.h"
 
 namespace host {
 
@@ -18,12 +20,17 @@ struct Options {
   bool trace_calls = false;      // log HLE calls
   bool quiet = false;
   uint64_t time_base = 0;        // preset timebase (0 = derive from wall clock like Dolphin)
+  bool time_base_set = false;    // explicit preset, including zero, for deterministic validation
   int volume = 0;                // audio output volume percent (0 = muted, the development default)
   double hang_watch = 0.0;       // seconds without a retrace before the guest is declared hung (0 = off)
   std::string sys_dir = "port/slippi_sys";   // Slippi Sys folder (code tables, GameFiles served over the EXI device)
   std::string replay_dir = "replays";        // where .slp recordings are written
   std::string card_dir = "User/GC/CardA";    // memory card slot A as a folder of .gci files
   std::string audio_dump;        // optional WAV file receiving everything the AI DMA plays
+  bool offline = false;          // explicitly disables online services in portable launchers
+  std::string profile_dir;       // explicit profile location; portable CLI never discovers one
+  std::string cache_dir;         // explicit isolated output/cache location for portable launchers
+  bool trace_scenes = false;     // raw state-machine transitions for native acceptance evidence
 };
 
 extern Options options;
@@ -33,7 +40,11 @@ extern ppc::Context* cpu;
 
 // ---- logging ----
 void log(const char* fmt, ...);
+void close_log_file();  // finalizes the explicit log before artifact identity is recorded
 void log_guest_text(const char* data, size_t len);  // OSReport output
+using FatalObserver = std::function<void(const std::string&)>;
+void set_fatal_observer(FatalObserver observer);   // diagnostic artifact hook; never controls the exit
+void notify_fatal_observer(const std::string& reason);  // invoke only after simulation unwinding/quiescence
 [[noreturn]] void die(const char* fmt, ...);
 const char* symbol_name(uint32_t addr);
 
@@ -55,6 +66,8 @@ uint32_t disc_fst_offset();
 uint32_t disc_fst_size();
 uint32_t disc_fst_max_size();
 bool disc_find_file(const std::string& name, uint32_t* offset, uint32_t* size);
+const std::string& disc_dol_sha1();
+bool disc_dol_verified();
 
 // ---- boot ----
 void boot_setup();               // low memory, FST placement, DOL load, registers
@@ -72,6 +85,9 @@ bool exit_requested();
 void request_exit(int code);
 int exit_code();
 uint32_t retrace_count();
+SceneTrace scene_trace_snapshot();
+void close_state_trace();
+bool state_trace_output_ok();
 
 // ---- simulation-thread cost accounting (per retrace; logged when a frame exceeds 20 ms) ----
 enum SimCost { SIM_DVD, SIM_AX, SIM_JUKEBOX, SIM_EXI, SIM_SNAPSHOT, SIM_QUEUE, SIM_OBSERVE, SIM_COST_COUNT };

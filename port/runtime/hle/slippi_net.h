@@ -150,7 +150,7 @@ class NetplayClient {
   enum class DisconnectReason : uint32_t { UNSPECIFIED = 0, POOR_PERFORMANCE = 1 };
 
   NetplayClient(std::vector<std::string> addrs, std::vector<uint16_t> ports, uint8_t remote_player_count, uint16_t local_port,
-                bool is_decider, uint8_t player_idx);
+                bool is_decider, uint8_t player_idx, const std::string& bind_address = {});
   ~NetplayClient();
 
   bool IsDecider() const { return is_decider_; }

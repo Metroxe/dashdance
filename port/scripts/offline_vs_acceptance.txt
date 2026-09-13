@@ -1,0 +1,54 @@
+# Deterministic offline acceptance path on an isolated empty card.
+#
+# The absolute navigation is the exact upstream-proven vs_match sequence:
+# Slippi boot menu -> back out twice -> VS Mode -> Melee -> two human ports
+# choose characters -> Battlefield.  Do not retime it without scene telemetry.
+300 B
+310
+380 B
+390
+460 sy=-127
+466
+500 A
+510
+580 A
+590
+700 p=2
+1000 sx=61 sy=127
+1000 p=2 sy=127
+1017
+1017 p=2
+1040 A
+1040 p=2 A
+1050
+1050 p=2
+1100 START
+1110
+1300 sy=100
+1305
+1330 A
+1340
+
+# The offline replay recorder starts this section once its first post-frame 1
+# event arrives.  This proves scripted input continues in the actual match;
+# these inputs are not used as evidence that the match was reached.
+@match
+@loop 240
+0
+0 p=2
+30 sx=80
+30 p=2 sx=-80
+70 sx=80 A
+70 p=2 sx=-80 A
+76
+76 p=2
+105 X
+105 p=2 Y
+110
+110 p=2
+140 sx=-80
+140 p=2 sx=80
+180 L
+180 p=2 R
+210
+210 p=2
