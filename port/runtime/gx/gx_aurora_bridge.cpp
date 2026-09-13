@@ -88,6 +88,15 @@ Draw convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
   soft(!(d.components & (VB_HAS_NRM1 | VB_HAS_NRM2 | VB_UNCAPTURED_NBT)),
        "NBT binormal/tangent are not captured; the normal alone is used (emboss texgens will be flat)");
   const auto texgens = d.xf_regs[0x3f];
+  // Emboss texgens and binormal/tangent sources need nine-component normals in
+  // Aurora. The capture carries only the normal, which is replicated: shading
+  // from those vectors is approximate, but the textures they address render.
+  bool nbt = (d.components & VB_UNCAPTURED_NBT) != 0;
+  for (unsigned i = 0; i < texgens && i < 8; ++i) {
+    const auto info = d.xf_regs[0x40 + i];
+    if (tmi_texgentype(info) == 1) nbt = true;
+  }
+  if (nbt && !(d.components & (VB_HAS_NRM0 | VB_HAS_NRM1 | VB_HAS_NRM2 | VB_UNCAPTURED_NBT))) nbt = false;
   check(texgens <= 8 && d.xf_regs[0x09] <= 2 && d.bp.numindstages() <= 4, "invalid GX stage/channel count");
   check(texgens == d.bp.numtexgens() && d.xf_regs[0x09] == d.bp.numcolchans(), "BP/XF stage counts disagree");
   soft(!d.bp.zfreeze() && bits(d.bp.ztex2(), 2, 2) == 0, "z-freeze or z-texture is not implemented in Aurora");
@@ -108,10 +117,8 @@ Draw convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
       // Aurora's shader generator is fatal on texgen sources it does not handle and
       // emboss maps need binormal/tangent vectors the capture does not carry, so
       // such draws are skipped rather than warned about.
-      check(tmi_texgentype(info) == 0 || tmi_texgentype(info) == 2 || tmi_texgentype(info) == 3,
-            "emboss/unknown texgen requires uncaptured NBT vectors");
-      soft(tmi_sourcerow(info) < 13 && tmi_sourcerow(info) != 3 && tmi_sourcerow(info) != 4,
-           "texgen source vector is not captured; position is used instead");
+      check(tmi_texgentype(info) <= 3, "unknown texgen type");
+      soft(tmi_sourcerow(info) < 13, "texgen source row is out of range; position is used instead");
       // Aurora always applies post transforms: disabled dual-transform is
       // explicitly normalized to the documented identity post-matrix below.
       const auto post = d.xf_regs[0x50 + i] & 63;
@@ -256,9 +263,10 @@ Draw convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
   for (unsigned i = 0; i < 8; ++i) if (d.components & (VB_HAS_UV0 << i)) vcd_hi |= 1u << (i * 2);
   if (indices_changed) { cp(state, 0x30, d.matrix_index_a); cp(state, 0x40, d.matrix_index_b); }
   if (!prev || prev->components != d.components) { cp(state, 0x50, vcd_lo); cp(state, 0x60, vcd_hi); }
-  // F32 XYZ/normal, RGBA8 colors, F32 ST. All fractions are zero.
-  cp(state, 0x70, 1 | (4u << 1) | (4u << 10) | (1u << 13) | (5u << 14) |
-                   (1u << 17) | (5u << 18) | (1u << 21) | (4u << 22));
+  // F32 XYZ/normal (NBT when synthesized), RGBA8 colors, F32 ST. All fractions are zero.
+  const uint32_t vat_a = 1 | (4u << 1) | (nbt ? 1u << 9 : 0) | (4u << 10) | (1u << 13) | (5u << 14) |
+                         (1u << 17) | (5u << 18) | (1u << 21) | (4u << 22);
+  cp(state, 0x70, vat_a);
   cp(state, 0x80, 9 | (9u << 9) | (9u << 18) | (9u << 27));
   cp(state, 0x90, (9u << 5) | (9u << 14) | (9u << 23));
   out.vertices.reserve(size_t(d.vertex_count) * sizeof(Vertex));
@@ -273,7 +281,10 @@ Draw convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
       out.vertices.push_back(v.texmtx[t]);
     }
     for (float x : v.pos) { check(std::isfinite(x), "non-finite position"); f32(out.vertices, x); }
-    if (d.components & any_normal) for (float x : v.nrm) { check(std::isfinite(x), "non-finite normal"); f32(out.vertices, x); }
+    if (d.components & any_normal) {
+      for (float x : v.nrm) check(std::isfinite(x), "non-finite normal");
+      for (int repeat = 0; repeat < (nbt ? 3 : 1); ++repeat) for (float x : v.nrm) f32(out.vertices, x);
+    }
     if (d.components & VB_HAS_COL0) for (auto x : v.col0) out.vertices.push_back(x);
     if (d.components & VB_HAS_COL1) for (auto x : v.col1) out.vertices.push_back(x);
     for (unsigned t = 0; t < 8; ++t) if (d.components & (VB_HAS_UV0 << t))

@@ -65,7 +65,7 @@ Any controller SDL recognises works out of the box. A WUP-028 GameCube adapter t
 | Slippi Online: login, matchmaking, rollback, replays | ✅ Working — verified with two local instances staying in sync for a full game |
 | Audio, keyboard, gamepads, GameCube adapter | ✅ Working |
 | Memory card saves (`.gci` folder) | ✅ Working |
-| Rendering | 🟡 Playable; a few effects (emboss bump-maps, some EFB-copy textures) are still being matched pixel for pixel |
+| Rendering | ✅ Native Metal renderer with the same Dolphin-derived shader pipeline as the Windows build, at up to 8× internal resolution |
 | iPhone / iPad | 🚧 In progress |
 | Apple Vision Pro | 🚧 In progress |
 
@@ -80,7 +80,7 @@ This is an alpha. Expect rough edges, and please report them.
 
 1. **Translate.** `port/recomp` reads your disc's executable and Slippi's Gecko code tables and writes one C++ function per game function. Apple Clang compiles them into a static library. This step runs on your machine; nothing from the game is ever committed here.
 2. **Run.** `port/runtime` is the host: guest memory, the GameCube SDK services the game expects (disc, controllers, audio DSP, memory cards), and the Slippi EXI device that Slippi's code talks to.
-3. **Draw.** The game's GX commands are decoded and handed to [Aurora](https://github.com/encounter/aurora), which turns them into Metal on macOS.
+3. **Draw.** The game's GX commands are decoded into draw calls and rendered by a native Metal backend (`port/runtime/gx/gx_metal.mm`) with shaders generated the way Dolphin generates them, so what you see matches the Windows build.
 4. **Connect.** `slippi_net` and `slippi_online` are wire-compatible ports of Slippi Dolphin's netplay client, matchmaking and reporting.
 
 ## Build from source
@@ -110,6 +110,6 @@ The upstream project, [Hero88go/melee-unlocked](https://github.com/Hero88go/mele
 
 ## Credits and legal
 
-Built on the work of the [Slippi](https://slippi.gg) team, the [Dolphin](https://dolphin-emu.org) project, [Aurora](https://github.com/encounter/aurora), the [doldecomp/melee](https://github.com/doldecomp/melee) contributors, and [Hero88go/melee-unlocked](https://github.com/Hero88go/melee-unlocked). This project is not affiliated with or endorsed by the Slippi team, Nintendo or HAL Laboratory.
+Built on the work of the [Slippi](https://slippi.gg) team, the [Dolphin](https://dolphin-emu.org) project, [SDL](https://libsdl.org), [Aurora](https://github.com/encounter/aurora) (build tooling and the diagnostic renderer), the [doldecomp/melee](https://github.com/doldecomp/melee) contributors, and [Hero88go/melee-unlocked](https://github.com/Hero88go/melee-unlocked). This project is not affiliated with or endorsed by the Slippi team, Nintendo or HAL Laboratory.
 
 GPL-2.0-or-later. Super Smash Bros. Melee is the property of Nintendo and HAL Laboratory. This repository contains no game data; you must supply your own legally obtained disc image.

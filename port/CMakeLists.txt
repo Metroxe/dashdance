@@ -379,12 +379,14 @@ if(MELEE_BUILD_PORT_METAL)
   set(AURORA_ENABLE_THP OFF CACHE BOOL "" FORCE)
   if(IOS OR VISIONOS)
     set(AURORA_CACHE_USE_ZSTD OFF CACHE BOOL "" FORCE)   # no Homebrew zstd on device targets
+    set(AURORA_ENABLE_GX OFF CACHE BOOL "" FORCE)        # only SDL3 is needed; the app renders with Metal directly
   endif()
   add_subdirectory("${MELEE_AURORA_DIR}" "${PROJECT_BINARY_DIR}/aurora" EXCLUDE_FROM_ALL)
   foreach(aurora_target aurora_core aurora_gx)
     target_compile_options(${aurora_target} PRIVATE $<$<CONFIG:Debug>:-O2>)
   endforeach()
 
+  if(NOT IOS AND NOT VISIONOS)
   add_library(runtime_metal STATIC ${PORT_PORTABLE_RUNTIME_SOURCES}
     runtime/host/input_sdl.cpp runtime/host/audio_sdl.cpp runtime/host/gc_adapter_none.cpp
     runtime/host/window_metal.cpp runtime/host/metal_frontend.cpp runtime/host/metal_frontend_aurora.cpp
@@ -421,6 +423,7 @@ if(MELEE_BUILD_PORT_METAL)
   target_link_libraries(port_metal_native_smoke PRIVATE port_build_options Threads::Threads
     aurora::core aurora::gx aurora::vi aurora::os aurora::mtx absl::flat_hash_map absl::btree)
   message(STATUS "melee_port_metal is an offline Cocoa/Metal/Aurora target; input, audio device and online remain separate")
+  endif()
 endif()
 
   # Online-capable macOS application runtime: the same portable sources plus the
@@ -443,28 +446,44 @@ endif()
     set(PORT_APPLE_LAUNCHER_SOURCE runtime/host/mac_launcher.mm)
     set(PORT_APPLE_UI_FRAMEWORK "-framework AppKit")
   endif()
+  # The application renders with the native Metal backend and talks to SDL3 directly;
+  # Aurora is only built here for its vendored SDL3.
   add_library(runtime_mac STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} runtime/hle/slippi_text.cpp
     runtime/hle/slippi_http_apple.mm
-    runtime/host/input_sdl.cpp runtime/host/audio_sdl.cpp ${PORT_GC_ADAPTER_SOURCE} ${PORT_APPLE_LAUNCHER_SOURCE}
-    runtime/host/window_metal.cpp runtime/host/metal_frontend.cpp runtime/host/metal_frontend_aurora.cpp
-    runtime/gx/gx_aurora.cpp runtime/gx/gx_aurora_bridge.cpp)
+    runtime/host/window_sdl.cpp runtime/host/audio_sdl.cpp ${PORT_GC_ADAPTER_SOURCE} ${PORT_APPLE_LAUNCHER_SOURCE}
+    runtime/gx/gx_metal.mm runtime/gx/gx_msl.cpp)
+  set_source_files_properties(runtime/gx/gx_metal.mm runtime/hle/slippi_http_apple.mm ${PORT_APPLE_LAUNCHER_SOURCE}
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   target_include_directories(runtime_mac PUBLIC runtime/ppc runtime/host runtime/hle runtime/gx
     "${PORT_GEN}" "${PROJECT_SOURCE_DIR}/native" third_party)
-  target_include_directories(runtime_mac PRIVATE "${MELEE_AURORA_DIR}/lib")
   target_compile_features(runtime_mac PUBLIC cxx_std_17)
   target_compile_definitions(runtime_mac PRIVATE MELEE_PORT_VERSION="${MELEE_PORT_VERSION}")
   target_compile_definitions(runtime_mac PUBLIC
     MELEE_PORT_INPUT_MANIFEST_PATH="${MELEE_PORT_INPUT_MANIFEST}"
     MELEE_PORT_INPUT_MANIFEST_SHA256="${MELEE_PORT_INPUT_MANIFEST_SHA256}")
   target_link_libraries(runtime_mac PUBLIC native_animation port_build_options Threads::Threads port_enet
-    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation"
-    aurora::core aurora::gx aurora::vi aurora::os aurora::mtx aurora::pad absl::flat_hash_map absl::btree)
+    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation" "-framework Metal" "-framework QuartzCore"
+    ${AURORA_SDL3_TARGET})
   if(LIBUSB_FOUND AND NOT IOS)
     target_link_libraries(runtime_mac PUBLIC PkgConfig::LIBUSB)
   endif()
   add_dependencies(runtime_mac port_verify_generated)
 
   add_executable(melee_port_mac app/main_mac.cpp)
+  if(IOS OR VISIONOS)
+    set_target_properties(melee_port_mac PROPERTIES
+      MACOSX_BUNDLE TRUE OUTPUT_NAME "MeleeUnlocked"
+      MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/app/ios/Info.plist.in"
+      MACOSX_BUNDLE_GUI_IDENTIFIER gg.meleeunlocked.ios
+      MACOSX_BUNDLE_BUNDLE_NAME "Melee Unlocked"
+      MACOSX_BUNDLE_BUNDLE_VERSION "${MELEE_PORT_VERSION}"
+      MACOSX_BUNDLE_SHORT_VERSION_STRING "${MELEE_PORT_VERSION}"
+      XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2,7")
+    # The Slippi Sys folder ships inside the bundle so the app is self-contained.
+    add_custom_command(TARGET melee_port_mac POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/slippi_sys"
+      VERBATIM)
+  endif()
   target_link_libraries(melee_port_mac PRIVATE runtime_mac guest)
   target_compile_definitions(melee_port_mac PRIVATE MELEE_PORT_VERSION="${MELEE_PORT_VERSION}")
   port_add_artifact_verification(melee_port_mac)

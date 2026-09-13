@@ -3,13 +3,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "audio.h"
 #include "exi_slippi.h"
-#include "gx_aurora_bridge.h"
+#include "gecko_data.h"
 #include "gx_core.h"
+#include "gx_metal.h"
 #include "hle_dvd.h"
 #include "host.h"
 #include "mac_launcher.h"
-#include "metal_frontend.h"
-#include "metal_window.h"
 #include "numeric.h"
 #include "slippi_net.h"
 #include "slippi_online.h"
@@ -25,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include <algorithm>
 #include <mach-o/dyld.h>
 #include <TargetConditionals.h>
 #if TARGET_OS_IPHONE
@@ -46,6 +46,11 @@ void usage() {
       "  --volume 0-100           output volume (default 70)\n"
       "  --window WxH             initial window size (default 1280x960)\n"
       "  --no-vsync               present without vertical sync\n"
+      "  --scale N|auto           internal resolution multiplier (default auto)\n"
+      "  --widescreen             Slippi 16:9 code and 16:9 presentation\n"
+      "  --sharpness 0..1         contrast-adaptive sharpening\n"
+      "  --anisotropy 1..16       anisotropic filtering (default 16)\n"
+      "  --capture FILE.ppm       write the presented frame N (--capture-frame N)\n"
       "  --offline                disable Slippi Online services\n"
       "  --user-dir DIR           Slippi folder holding user.json (default: the Slippi Launcher's)\n"
       "  --online-delay N         Slippi Online input delay frames (default 2)\n"
@@ -119,9 +124,10 @@ bool ensure_dir(const std::string& path, const char* what) {
 int main(int argc, char** argv) {
   host::Options& o = host::options;
   auto& online = slippi::online::config();
-  bool allow_interpreter = true, vsync = true;
+  bool allow_interpreter = true;
   int volume = 70;
   uint32_t window_w = 1280, window_h = 960;
+  gx::MetalOptions gfx;
   std::string script, iso_arg, user_dir, sys_dir, replay_dir, card_dir, profile_dir, cache_dir, log_file;
   bool offline = false, choose_disc = false;
   for (int i = 1; i < argc; ++i) {
@@ -133,7 +139,14 @@ int main(int argc, char** argv) {
     else if (a == "--choose-disc") choose_disc = true;
     else if (a == "--volume") volume = std::atoi(next());
     else if (a == "--window") { if (std::sscanf(next(), "%ux%u", &window_w, &window_h) != 2 || window_w < 320 || window_h < 240) { usage(); return 2; } }
-    else if (a == "--no-vsync") vsync = false;
+    else if (a == "--no-vsync") gfx.vsync = false;
+    else if (a == "--scale") { std::string v = next(); gfx.efb_scale = v == "auto" ? 0 : std::atoi(v.c_str()); if (v != "auto" && gfx.efb_scale < 1) { usage(); return 2; } }
+    else if (a == "--widescreen") gfx.widescreen = true;
+    else if (a == "--sharpness") gfx.sharpness = std::clamp((float)std::atof(next()), 0.0f, 1.0f);
+    else if (a == "--anisotropy") gfx.anisotropy = std::clamp(std::atoi(next()), 1, 16);
+    else if (a == "--capture") gfx.capture_path = next();
+    else if (a == "--capture-frame") gfx.capture_frame = (uint32_t)std::strtoul(next(), nullptr, 0);
+    else if (a == "--capture-every") gfx.capture_every = (uint32_t)std::strtoul(next(), nullptr, 0);
     else if (a == "--offline") offline = true;
     else if (a == "--user-dir") user_dir = next();
     else if (a == "--online-delay") online.delay = std::atoi(next());
@@ -189,11 +202,8 @@ int main(int argc, char** argv) {
   if (log_file.empty()) log_file = (support / "melee_port.log").string();
   if (sys_dir.empty()) sys_dir = find_sys_dir();
   if (sys_dir.empty()) { std::fprintf(stderr, "cannot find the Slippi Sys folder; pass --sys-dir or set MELEE_SYS_DIR\n"); return 2; }
-  const std::string aurora_user = (fs::path(profile_dir) / "Aurora").string();
-  const std::string aurora_cache = (fs::path(cache_dir) / "Aurora").string();
   for (const auto& [dir, what] : std::vector<std::pair<std::string, const char*>>{
-           {profile_dir, "profile"}, {card_dir, "memory card"}, {replay_dir, "replay"}, {cache_dir, "cache"},
-           {aurora_user, "Aurora profile"}, {aurora_cache, "Aurora cache"}})
+           {profile_dir, "profile"}, {card_dir, "memory card"}, {replay_dir, "replay"}, {cache_dir, "cache"}})
     if (!ensure_dir(dir, what)) return 2;
   if (!offline && user_dir.empty()) user_dir = find_slippi_user_dir();
   if (!offline && user_dir.empty()) {
@@ -227,23 +237,18 @@ int main(int argc, char** argv) {
   }
   { std::ofstream out(remembered, std::ios::trunc); out << "iso=" << o.iso << "\n"; }
 
-  std::unique_ptr<host::MetalFrontend> frontend;
-  bool attached = false, audio_opened = false;
+  gecko::option_widescreen = gfx.widescreen;   // before the game loads the code table
+  gx::Backend* backend = nullptr;
+  bool audio_opened = false;
   int code = 0;
   try {
-    host::AuroraMetalConfig metal;
-    metal.app_name = "Melee Unlocked";
-    metal.user_path = aurora_user;
-    metal.cache_path = aurora_cache;
-    metal.resources_path = o.sys_dir;
-    metal.window_width = window_w;
-    metal.window_height = window_h;
-    metal.vsync = vsync;
-    frontend = host::create_aurora_metal_frontend(metal);
-    host::metal_window_attach(*frontend);
-    attached = true;
+    void* layer = host::window_create((int)window_w, (int)window_h, L"Melee Unlocked", true);
+    int client_w = 0, client_h = 0;
+    host::window_client_size(&client_w, &client_h);
+    backend = gx::create_metal_backend(layer, client_w, client_h, gfx);
+    host::window_set_resize_callback([backend](int w, int h) { gx::metal_resize(backend, w, h); });
     host::g_has_window = true;
-    gx::init(frontend.get());
+    gx::init(backend);
     if (!host::audio_open(o.volume, o.audio_dump.c_str(), true)) host::log("audio: device unavailable, continuing silent");
     audio_opened = true;
 
@@ -262,10 +267,6 @@ int main(int argc, char** argv) {
         code = 3;
       }
     }
-  } catch (const gx::aurora_bridge::CoverageError& failure) {
-    host::log("unsupported Metal render state: %s", failure.what());
-    std::fprintf(stderr, "unsupported render state: %s\n", failure.what());
-    code = 5;
   } catch (const std::exception& failure) {
     host::log("frontend exception: %s", failure.what());
     std::fprintf(stderr, "%s\n", failure.what());
@@ -279,19 +280,15 @@ int main(int argc, char** argv) {
               (unsigned long long)underruns, (unsigned long long)silent_ms, (rate_low - 1.0) * 100.0, (rate_high - 1.0) * 100.0); }
   gx::init(nullptr);
   host::g_has_window = false;
-  if (attached) host::metal_window_detach(*frontend);
   if (audio_opened) host::audio_close();
   hle::dvd_shutdown();
   host::gcadapter_shutdown();
   slippi::shutdown();
-  if (frontend) {
-    const auto stats = frontend->stats();
-    host::log("metal: presented=%llu draws=%llu xfb=%llu unsupported render=%llu order=%llu",
-              (unsigned long long)stats.presented_frames, (unsigned long long)stats.decoded_draws,
-              (unsigned long long)stats.presented_xfb, (unsigned long long)stats.unsupported.render_state,
-              (unsigned long long)stats.unsupported.frame_order);
-    frontend->shutdown();
+  if (backend) {
+    host::log("metal: %llu frames presented", (unsigned long long)gx::metal_frames_presented(backend));
+    delete backend;
   }
+  host::window_destroy();
   ppc::log_aot_diagnostics();
   { uint64_t calls = 0, insns = 0; ppc::interpreter_stats(&calls, &insns);
     if (calls) host::log("interpreter: %llu calls into RAM-resident code, %llu instructions", (unsigned long long)calls, (unsigned long long)insns); }
