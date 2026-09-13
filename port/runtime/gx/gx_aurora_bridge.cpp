@@ -81,10 +81,12 @@ Draw convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
   check(d.vertex_count >= (d.primitive == 0x80 ? 4u : 3u) &&
         (d.primitive != 0x80 || d.vertex_count % 4 == 0) &&
         (d.primitive != 0x90 || d.vertex_count % 3 == 0), "incomplete primitive");
-  constexpr uint32_t supported = 0x1ff | VB_HAS_NRM0 | VB_HAS_NRM1 | VB_HAS_NRM2 | VB_HAS_COL0 | VB_HAS_COL1 | (0xffu << 15);
+  constexpr uint32_t supported = 0x1ff | VB_HAS_NRM0 | VB_HAS_NRM1 | VB_HAS_NRM2 | VB_HAS_COL0 | VB_HAS_COL1 |
+                                 (0xffu << 15) | VB_UNCAPTURED_NBT;
   check((d.components & ~supported) == 0, "unknown/lost vertex components are unsupported");
-  constexpr uint32_t any_normal = VB_HAS_NRM0 | VB_HAS_NRM1 | VB_HAS_NRM2;
-  soft(!(d.components & (VB_HAS_NRM1 | VB_HAS_NRM2)), "NBT binormal/tangent are not captured; the normal alone is used");
+  constexpr uint32_t any_normal = VB_HAS_NRM0 | VB_HAS_NRM1 | VB_HAS_NRM2 | VB_UNCAPTURED_NBT;
+  soft(!(d.components & (VB_HAS_NRM1 | VB_HAS_NRM2 | VB_UNCAPTURED_NBT)),
+       "NBT binormal/tangent are not captured; the normal alone is used (emboss texgens will be flat)");
   const auto texgens = d.xf_regs[0x3f];
   check(texgens <= 8 && d.xf_regs[0x09] <= 2 && d.bp.numindstages() <= 4, "invalid GX stage/channel count");
   check(texgens == d.bp.numtexgens() && d.xf_regs[0x09] == d.bp.numcolchans(), "BP/XF stage counts disagree");
@@ -103,10 +105,13 @@ Draw convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
     soft(matrix_row(row, true), "unaligned or out-of-range texture matrix selector");
     if (i < texgens) {
       const auto info = d.xf_regs[0x40 + i];
-      soft(tmi_texgentype(info) == 0 || tmi_texgentype(info) == 2 || tmi_texgentype(info) == 3,
+      // Aurora's shader generator is fatal on texgen sources it does not handle and
+      // emboss maps need binormal/tangent vectors the capture does not carry, so
+      // such draws are skipped rather than warned about.
+      check(tmi_texgentype(info) == 0 || tmi_texgentype(info) == 2 || tmi_texgentype(info) == 3,
             "emboss/unknown texgen requires uncaptured NBT vectors");
       soft(tmi_sourcerow(info) < 13 && tmi_sourcerow(info) != 3 && tmi_sourcerow(info) != 4,
-            "texgen uses missing or unsupported source vectors");
+           "texgen source vector is not captured; position is used instead");
       // Aurora always applies post transforms: disabled dual-transform is
       // explicitly normalized to the documented identity post-matrix below.
       const auto post = d.xf_regs[0x50 + i] & 63;
@@ -224,7 +229,20 @@ Draw convert_draw(const Frame& frame, size_t index, Extent extent, const DrawCal
   viewport[3] -= 2; viewport[4] -= 2; // Aurora decoder subtracts 340; hardware uses 342.
   if (block_changed(d.xf_regs + 0x1a, prev ? prev->xf_regs + 0x1a : nullptr, 6 * 4)) xf_floats(state, 0x101a, viewport.data(), 6);
   if (block_changed(d.xf_regs + 0x20, prev ? prev->xf_regs + 0x20 : nullptr, 7 * 4)) xf_words(state, 0x1020, d.xf_regs + 0x20, 7);
-  if (block_changed(d.xf_regs + 0x3f, prev ? prev->xf_regs + 0x3f : nullptr, 9 * 4)) xf_words(state, 0x103f, d.xf_regs + 0x3f, 9);
+  if (block_changed(d.xf_regs + 0x3f, prev ? prev->xf_regs + 0x3f : nullptr, 9 * 4)) {
+    // Aurora leaves a texgen's source unset when the XF row is outside its table and
+    // then aborts shader generation if any TEV stage samples it. Rows it cannot
+    // serve (binormal/tangent, out of range) are rewritten to the position row.
+    uint32_t texgen[9];
+    texgen[0] = d.xf_regs[0x3f];
+    for (unsigned i = 0; i < 8; ++i) {
+      uint32_t info = d.xf_regs[0x40 + i];
+      const auto type = tmi_texgentype(info), row = tmi_sourcerow(info);
+      if (type != 2 && type != 3 && (row >= 13 || row == 3 || row == 4)) info &= ~(31u << 7);
+      texgen[1 + i] = info;
+    }
+    xf_words(state, 0x103f, texgen, 9);
+  }
   uint32_t post[8];
   for (unsigned i = 0; i < 8; ++i) post[i] = d.xf_regs[0x12] & 1 ? d.xf_regs[0x50 + i] : 61;
   if (!prev || (prev->xf_regs[0x12] & 1) != (d.xf_regs[0x12] & 1) ||
@@ -288,16 +306,15 @@ void validate_copy(const Frame& frame, size_t index, Extent extent) {
     fail(frame, where, "copy rectangle is outside the logical framebuffer");
   if (c.is_depth || (c.zcontrol & 7) > 1) fail(frame, where, "depth/unsupported-pixel-format copy");
   const bool full_rect = c.src_x == 0 && c.src_y == 0 && c.src_w == extent.width && c.src_h == extent.height;
-  if (c.clear && !full_rect) fail(frame, where, "partial-rectangle clears are not implemented in Aurora");
+  if (c.clear && !full_rect) warn(frame, where, "partial-rectangle clear is copied without clearing (Aurora clears whole targets only)");
   if (c.to_xfb) {
     if (!full_rect || c.y_scale != 1.f || c.half_scale || !c.clear ||
         (c.blendmode & 0x18) != 0x18 || !(c.zmode & 0x10))
       warn(frame, where, "XFB copy is not a full-size unscaled copy with full color/alpha/depth clear");
   } else {
-    if (c.format != 6 || c.intensity || c.half_scale)
-      fail(frame, where, "baseline texture copies require unscaled RGBA8");
+    if (c.half_scale) warn(frame, where, "half-scale texture copy is copied at full size");
     const auto stride = ((c.src_w + 3) / 4) * 64;
-    if (c.dest_stride != stride) fail(frame, where, "strided texture-copy destinations are not covered");
+    if (c.dest_stride != stride) warn(frame, where, "strided texture-copy destination is copied as if packed");
     if (c.destination_before_copy.size() != uint64_t(stride) * ((c.src_h + 3) / 4))
       fail(frame, where, "copy-time destination bytes were not captured");
     if (c.dstalpha & 0x100) warn(frame, where, "destination-alpha copy override is not fidelity-validated");

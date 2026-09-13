@@ -377,6 +377,9 @@ if(MELEE_BUILD_PORT_METAL)
   set(AURORA_ENABLE_DVD OFF CACHE BOOL "" FORCE)
   set(AURORA_ENABLE_CARD OFF CACHE BOOL "" FORCE)
   set(AURORA_ENABLE_THP OFF CACHE BOOL "" FORCE)
+  if(IOS OR VISIONOS)
+    set(AURORA_CACHE_USE_ZSTD OFF CACHE BOOL "" FORCE)   # no Homebrew zstd on device targets
+  endif()
   add_subdirectory("${MELEE_AURORA_DIR}" "${PROJECT_BINARY_DIR}/aurora" EXCLUDE_FROM_ALL)
   foreach(aurora_target aurora_core aurora_gx)
     target_compile_options(${aurora_target} PRIVATE $<$<CONFIG:Debug>:-O2>)
@@ -422,20 +425,27 @@ endif()
 
   # Online-capable macOS application runtime: the same portable sources plus the
   # Slippi text/transport/reporting implementations (ENet, iconv, libcurl).
-  find_package(CURL REQUIRED)
   find_package(PkgConfig QUIET)
   if(PkgConfig_FOUND)
     pkg_check_modules(LIBUSB IMPORTED_TARGET libusb-1.0)
   endif()
-  if(LIBUSB_FOUND)
+  if(LIBUSB_FOUND AND NOT IOS)
     set(PORT_GC_ADAPTER_SOURCE runtime/host/gc_adapter_libusb.cpp)
     message(STATUS "GameCube adapter: libusb ${LIBUSB_VERSION}")
   else()
     set(PORT_GC_ADAPTER_SOURCE runtime/host/gc_adapter_none.cpp)
     message(STATUS "GameCube adapter: libusb-1.0 not found; WUP-028 support disabled")
   endif()
+  if(IOS)
+    set(PORT_APPLE_LAUNCHER_SOURCE runtime/host/ios_launcher.mm)
+    set(PORT_APPLE_UI_FRAMEWORK "-framework UIKit")
+  else()
+    set(PORT_APPLE_LAUNCHER_SOURCE runtime/host/mac_launcher.mm)
+    set(PORT_APPLE_UI_FRAMEWORK "-framework AppKit")
+  endif()
   add_library(runtime_mac STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} runtime/hle/slippi_text.cpp
-    runtime/host/input_sdl.cpp runtime/host/audio_sdl.cpp ${PORT_GC_ADAPTER_SOURCE} runtime/host/mac_launcher.mm
+    runtime/hle/slippi_http_apple.mm
+    runtime/host/input_sdl.cpp runtime/host/audio_sdl.cpp ${PORT_GC_ADAPTER_SOURCE} ${PORT_APPLE_LAUNCHER_SOURCE}
     runtime/host/window_metal.cpp runtime/host/metal_frontend.cpp runtime/host/metal_frontend_aurora.cpp
     runtime/gx/gx_aurora.cpp runtime/gx/gx_aurora_bridge.cpp)
   target_include_directories(runtime_mac PUBLIC runtime/ppc runtime/host runtime/hle runtime/gx
@@ -447,9 +457,9 @@ endif()
     MELEE_PORT_INPUT_MANIFEST_PATH="${MELEE_PORT_INPUT_MANIFEST}"
     MELEE_PORT_INPUT_MANIFEST_SHA256="${MELEE_PORT_INPUT_MANIFEST_SHA256}")
   target_link_libraries(runtime_mac PUBLIC native_animation port_build_options Threads::Threads port_enet
-    Iconv::Iconv CURL::libcurl "-framework AppKit"
+    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation"
     aurora::core aurora::gx aurora::vi aurora::os aurora::mtx aurora::pad absl::flat_hash_map absl::btree)
-  if(LIBUSB_FOUND)
+  if(LIBUSB_FOUND AND NOT IOS)
     target_link_libraries(runtime_mac PUBLIC PkgConfig::LIBUSB)
   endif()
   add_dependencies(runtime_mac port_verify_generated)

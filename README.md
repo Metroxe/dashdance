@@ -1,149 +1,115 @@
+<div align="center">
 
+# Melee Unlocked for Apple
 
-# Melee Unlocked - Alpha
+### Super Smash Bros. Melee. Slippi Online. Native on your Mac.
 
-An **EXPERIMENTAL** native Windows build of Super Smash Bros. Melee (NTSC 1.02) with Slippi online play and an
-unlocked display frame rate.
+No emulator. No Dolphin. The game itself, translated ahead of time into native Apple Silicon code and rendered with Metal — with Slippi's matchmaking, rollback netcode and replays built in.
 
-The game's own PowerPC code is translated ahead of time into C++ (static recompilation of the
-retail executable plus Slippi's Gecko codes) and runs against a native D3D12 renderer, so the
-game logic stays exactly what the GameCube ran, at 60 Hz, while the display runs at any rate.
-In-between frames come from the game's own animation data and physics state, not from image
-interpolation, so an unlocked 200 Hz display shows real intermediate poses with no added latency.
+<img src="docs/images/match-onett.jpg" width="820" alt="Fox versus Luigi on Onett, running natively on macOS with the Slippi delay indicator in the corner">
 
-Nothing from the game is included. You supply your own Melee NTSC 1.02 ISO.
+<sub>Real capture from an Apple M5 Pro running macOS 27. Nothing from the game is included in this repository — you bring your own disc image.</sub>
 
-This project is not affiliated with, endorsed by, or supported by the Slippi team, Nintendo or
-HAL Laboratory. Slippi netplay compatibility is implemented from Slippi's open source code
-(GPL). Questions and bugs about this build go to this repository or the Discord below, not to
-the Slippi team.
+<br>
 
-## Discord / Help
-Discord can be found here https://discord.gg/K7HHs3r8ty
+![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-000000?logo=apple&logoColor=white)
+![iOS](https://img.shields.io/badge/iOS-in%20progress-8E8E93?logo=apple&logoColor=white)
+![visionOS](https://img.shields.io/badge/visionOS-in%20progress-8E8E93?logo=apple&logoColor=white)
+![Renderer](https://img.shields.io/badge/renderer-Metal-5E5CE6)
+![Slippi](https://img.shields.io/badge/Slippi-Online%20compatible-34C759)
+![License](https://img.shields.io/badge/license-GPL--2.0--or--later-lightgrey)
 
-## Install
+</div>
 
-Download `MeleeUnlocked-<version>-win64.zip` from [Releases](https://github.com/hero88go/melee-unlocked/releases)
-and extract it anywhere. Then pick one of two ways to run it. **The launcher is optional**;
-the game does not depend on it, and the manual way is complete on its own.
+---
 
-### Manual (no launcher)
+## Why this exists
 
-1. Drag your Melee NTSC 1.02 ISO onto `MeleeUnlocked.bat`, or put the ISO next to it named
-   `melee.iso` and double-click `MeleeUnlocked.bat`.
-2. Play. The first launch precompiles the graphics pipelines (15 to 30 seconds, progress in
-   the title bar). In game, F1 (or Z + Start) opens the PC settings.
-3. To update, extract a newer zip over the folder. Settings, saves and replays are kept.
+Melee has always been an emulated game on the Mac: a PowerPC console, simulated instruction by instruction, with the netcode bolted onto the emulator. This project takes the other road.
 
-### Melee Unlocked Launcher (optional)
+- **It is the real game.** The original executable and Slippi's code patches are translated once, ahead of time, into ordinary native code. Nothing is interpreted while you play.
+- **It is Slippi.** Matchmaking, the rollback netcode, replays and game reporting are ports of Slippi's own open-source code. You play Unranked, Direct and Teams against people on regular Slippi Dolphin, and they never know the difference.
+- **It is a Mac app.** Metal rendering, native audio, your keyboard, any SDL-compatible controller, and the official GameCube adapter over USB.
 
-A small window in the same zip, `MeleeUnlockedLauncher.exe`, for people who want setup,
-updates and the Slippi account check in one place.
+<div align="center">
+<img src="docs/images/online-play.jpg" width="400" alt="The Slippi Online Play menu">&nbsp;
+<img src="docs/images/character-select.jpg" width="400" alt="Character select with Fox and Luigi ready to fight">
+</div>
 
-- **Build tab**: drop the ISO onto the window. It checks the disc, precompiles the graphics
-  pipelines for your GPU once and remembers the path. The ISO is never copied.
-- **Play**: press PLAY. It shows which Slippi account will be used.
-- **Updates**: it checks for a new release on every start. "Update and restart" installs it in
-  place; settings, saves and replays stay.
+## Get playing
 
-### Build from source
+You need an Apple Silicon Mac, your own **Super Smash Bros. Melee NTSC 1.02** disc image (`.iso` or `.gcm`), and, for online play, the [Slippi Launcher](https://slippi.gg/downloads) signed in once.
 
-Windows 10/11, your own ISO, about 5-10 minutes the first time. The game is translated to C++
-and compiled on your machine; nothing from the ISO enters the repository.
+1. **Build the app** (about ten minutes the first time — see [Build from source](#build-from-source)).
+2. **Open Melee Unlocked.** Pick your disc image when asked. The app remembers it.
+3. **Play.** Online Play uses the account you signed into in the Slippi Launcher automatically.
 
-Either drag the ISO onto `play.bat` in a clone of this repo (it installs Python, CMake and the
-Visual Studio 2022 Build Tools with winget if missing, then builds and starts the game), or:
+### Controls
 
-```powershell
-git clone https://github.com/hero88go/melee-unlocked.git
-cd melee-unlocked
-python tools/extract_dol.py "C:/path/to/melee.iso" build/main.dol
-python port/recomp/recomp.py --dol build/main.dol --gct-base 0x8065CC80
-cmake -S . -B build-review -G "Visual Studio 17 2022" -A x64 -DMELEE_BUILD_EXPERIMENTAL_PORT=ON
-cmake --build build-review --config Release --target melee_port --parallel
-build-review/port/Release/melee_port.exe --iso "C:/path/to/melee.iso" --threaded-renderer --fps unlocked --frame-mode authored --scale auto --volume 70
+| GameCube | Keyboard |
+|---|---|
+| Control stick | Arrow keys |
+| C-stick | I J K L |
+| A / B / X / Y | Z / X / C / V |
+| L / R / Z | Q / W / E |
+| D-pad | T F G H |
+| Start | Return |
+
+Any controller SDL recognises works out of the box. A WUP-028 GameCube adapter takes priority on the ports it has controllers plugged into.
+
+## Where it stands
+
+| | Status |
+|---|---|
+| Boot, menus, offline VS matches | ✅ Working |
+| Slippi Online: login, matchmaking, rollback, replays | ✅ Working — verified with two local instances staying in sync for a full game |
+| Audio, keyboard, gamepads, GameCube adapter | ✅ Working |
+| Memory card saves (`.gci` folder) | ✅ Working |
+| Rendering | 🟡 Playable; a few effects (emboss bump-maps, some EFB-copy textures) are still being matched pixel for pixel |
+| iPhone / iPad | 🚧 In progress |
+| Apple Vision Pro | 🚧 In progress |
+
+This is an alpha. Expect rough edges, and please report them.
+
+<div align="center">
+<img src="docs/images/netplay-stadium.jpg" width="620" alt="An online match on Pokémon Stadium between two local instances">
+<br><sub>Two instances of the app in an online match against each other on one Mac.</sub>
+</div>
+
+## How it works
+
+1. **Translate.** `port/recomp` reads your disc's executable and Slippi's Gecko code tables and writes one C++ function per game function. Apple Clang compiles them into a static library. This step runs on your machine; nothing from the game is ever committed here.
+2. **Run.** `port/runtime` is the host: guest memory, the GameCube SDK services the game expects (disc, controllers, audio DSP, memory cards), and the Slippi EXI device that Slippi's code talks to.
+3. **Draw.** The game's GX commands are decoded and handed to [Aurora](https://github.com/encounter/aurora), which turns them into Metal on macOS.
+4. **Connect.** `slippi_net` and `slippi_online` are wire-compatible ports of Slippi Dolphin's netplay client, matchmaking and reporting.
+
+## Build from source
+
+Requirements: Xcode Command Line Tools, Homebrew (`cmake ninja python libusb`), a checkout of [doldecomp/melee](https://github.com/doldecomp/melee) for the animation helpers, and your disc's `main.dol`.
+
+```bash
+git clone https://github.com/TheAndersMadsen/melee-slippi-native.git
+cd melee-slippi-native
+tools/bootstrap_aurora.sh
+python3 tools/bootstrap_port.py --decomp-root /path/to/doldecomp-melee \
+  --dol /path/to/main.dol --build-dir build/mac --gct-base 0x8065CC80 --macos-arch arm64 --stage generate
+cmake -S . -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DMELEE_DECOMP_ROOT=/path/to/doldecomp-melee -DMELEE_DOL_PATH=/path/to/main.dol \
+  -DMELEE_PORT_GENERATED_DIR=$PWD/build/mac/generated/guest \
+  -DMELEE_BUILD_PORT_TESTS=ON -DMELEE_BUILD_PORT_HEADLESS=ON -DMELEE_BUILD_PORT_METAL=ON
+cmake --build build/mac --target melee_port_mac --parallel
+tools/package_macos_app.sh build/mac dist
+open "dist/Melee Unlocked.app"
 ```
 
-(Add the target `melee_unlocked` to the build line if you want the optional launcher; run
-`build-review/port/Release/MeleeUnlockedLauncher.exe` from the checkout and it finds the repo.)
+`melee_port_mac --help` lists every option (window size, volume, input delay, explicit disc or Slippi folder). `melee_port_metal` and `melee_port_headless` are offline diagnostic executables used by the test suite. Developer notes live in [docs/](docs/).
 
-## FAQ
+## Windows
 
-**Was this "vibe coded"?**
+The upstream project, [Hero88go/melee-unlocked](https://github.com/Hero88go/melee-unlocked), is the Windows build with D3D12, DLSS and an unlocked display rate. This repository tracks it and adds the Apple platforms.
 
-This was developed using Fable 5.1 and GPT 6 Astra, much like the 100% decomp. 
-You can either complain about it or enjoy it, the truth is the decomp + PC port would not have been possible or would have taken infinitely longer without the latest AI coding models.
-As humans we can either work with the robots or against them, I believe in technlogical progress and making cool shit, if we do not use all tools available we are choosing to limit our results.
-I will not handicap myself and theres no reason anyone has to wait any longer for ports and advancements like this. If I were to shy away from every new technology I would not be the person I am today. 
+## Credits and legal
 
-I am interested in collabing with other developers but so far have found no collective space for this type of dicussion; PC port dicussion is actively discouraged in the Melee decomp discord
-My vision for the project is keeping it open source so anyone can view the work and make it better. 
+Built on the work of the [Slippi](https://slippi.gg) team, the [Dolphin](https://dolphin-emu.org) project, [Aurora](https://github.com/encounter/aurora), the [doldecomp/melee](https://github.com/doldecomp/melee) contributors, and [Hero88go/melee-unlocked](https://github.com/Hero88go/melee-unlocked). This project is not affiliated with or endorsed by the Slippi team, Nintendo or HAL Laboratory.
 
-## Features
-
-- Unlocked frame rate (monitor rate, a fixed cap, or fully unlocked) with sub-frame animation
-- Slippi online against regular Slippi Dolphin players, using your Slippi Launcher login
-- GameCube adapter (WUP-028 with the WinUSB driver), keyboard fallback
-- DLSS / DLAA (NVIDIA Streamline), internal resolution up to 8x, SSAA, anisotropic filtering,
-  sharpening, borderless fullscreen, VSync
-- Widescreen 16:9 (Slippi's own optional code, online safe)
-- Memory card saves as .gci files (Dolphin GCI-folder format, drop in your existing save)
-- PC settings overlay in the game window: F1 or Z + Start
-- Optional launcher with self-update
-
-## Slippi online
-
-Everything Slippi Dolphin does for netplay is built in: matchmaking, rollback netcode, the
-Slippi code set, replay recording, game reporting. Slippi Dolphin itself is not needed and is
-not touched.
-
-**Is the Slippi Launcher required?** For online play, yes: a Slippi account is required and
-accounts are created and logged in only through the [Slippi Launcher](https://slippi.gg/downloads).
-Install it, log in once, and the game picks up that login automatically (the optional Melee
-Unlocked Launcher shows the account on its Play page and links to the download if none is
-found). The **Slippi** Launcher also installs the WinUSB driver a GameCube adapter needs. For
-offline play the Slippi Launcher is not required. NOTE: **we are not affiliated with the Slippi team.**
-
-Unranked, Direct codes and Teams work against players on regular Slippi Dolphin; they change
-nothing on their side. Replays (.slp) are written to `Replays\`.
-
-
-## Bug reports
-
-Open a [GitHub issue](https://github.com/hero88go/melee-unlocked/issues) using the template.
-Attach `melee_port.log` from the game folder, your `port-settings.ini`, and the .slp replay if
-the bug happened in a match.
-
-## Repository layout
-
-`port/recomp/` is the recompiler (Python): it reads the DOL and the Slippi code tables
-(`port/slippi_sys/`, vendored from Slippi) and writes `port/generated/` (not committed).
-`port/runtime/` is the host runtime: PowerPC helpers, HLE of the GameCube SDK (OS, VI, PAD, DVD,
-AI/AX audio, CARD, EXI), the Slippi EXI device, netcode, game reporting, the D3D12 renderer and
-the sub-frame solver. `port/app/launcher.cpp` is the optional launcher. `tools/` holds validation,
-benchmarking and packaging scripts. See `PORT_COMPLETION.md` for the technical state and
-evidence, `HANDOFF_FABLE_3.md` for the roadmap.
-
-`tools/package_release.py` produces the release zip (version from `VERSION`). The replay
-playback build (`melee_port_playback`, used to verify frame-exactness against Dolphin replays)
-is described in `PORT_COMPLETION.md`.
-
-
-
-## Verification
-
-Development launcher: `run-native.bat` (or `python tools/launch_native.py --iso <iso> ...`) starts the
-build in `build-review/port/Play/` if present, else the Release build, muted and windowed by default.
-
-- `ctest --test-dir build-review -C Release`: unit tests
-- `python tools/validate_native.py --iso <iso>`: 2400 simulation checkpoints must match across
-  headless, hidden, threaded and authored rendering
-- `python tools/online_pair.py --script port/scripts/online_bot.txt`: two local instances play a
-  full Slippi online match; the log must show no `DESYNC`
-
-## License
-
-GPL-2.0-or-later. Parts of the runtime are ports of Dolphin and Slippi Ishiiruka code (GPL-2.0).
-Third-party components: ENet, Dear ImGui, nlohmann/json, NVIDIA Streamline (see `licenses/` in a
-release and `port/third_party/`). Super Smash Bros. Melee is the property of Nintendo and HAL
-Laboratory; this project contains none of its data.
+GPL-2.0-or-later. Super Smash Bros. Melee is the property of Nintendo and HAL Laboratory. This repository contains no game data; you must supply your own legally obtained disc image.

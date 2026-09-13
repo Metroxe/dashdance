@@ -29,6 +29,20 @@ GXColor clear_color(uint32_t argb) {
 void bp(uint8_t reg, uint32_t value) {
   fifo::write_u8(0x61); fifo::write_u32(uint32_t(reg) << 24 | (value & 0xffffff));
 }
+// EFB copy format (tp_realFormat with the intensity flag) -> the GX texture format the
+// game samples it as. Aurora converts the RGBA8 framebuffer into that format itself.
+GXTexFmt copy_format(const EfbCopy& c) {
+  if (c.intensity) {
+    switch (c.format) { case 0: return GX_TF_I4; case 2: return GX_TF_IA4; case 3: return GX_TF_IA8; case 8: return GX_TF_I8; default: return GX_TF_I8; }
+  }
+  switch (c.format) {
+    case 0: return GX_CTF_R4; case 2: return GX_CTF_RA4; case 3: return GX_CTF_RA8;
+    case 4: return GX_TF_RGB565; case 5: return GX_TF_RGB5A3; case 6: return GX_TF_RGBA8;
+    case 7: return GX_CTF_A8; case 8: return GX_CTF_R8; case 9: return GX_CTF_G8; case 10: return GX_CTF_B8;
+    case 11: return GX_CTF_RG8; case 12: return GX_CTF_GB8;
+    default: return GX_TF_RGBA8;
+  }
+}
 } // namespace
 
 struct AuroraBackend::Impl {
@@ -147,9 +161,10 @@ struct AuroraBackend::Impl {
         if (!c.to_xfb) {
           auto& token = copy_tokens[c.dest_addr];
           if (!token) token = std::make_unique<CopyToken>();
+          const bool full_rect = c.src_x == 0 && c.src_y == 0 && c.src_w == options.logical_width && c.src_h == options.logical_height;
           GXSetTexCopySrc(uint16_t(c.src_x), uint16_t(c.src_y), uint16_t(c.src_w), uint16_t(c.src_h));
-          GXSetTexCopyDst(uint16_t(c.src_w), uint16_t(c.src_h), GX_TF_RGBA8, GX_FALSE);
-          GXCopyTex(token.get(), c.clear ? GX_TRUE : GX_FALSE);
+          GXSetTexCopyDst(uint16_t(c.src_w), uint16_t(c.src_h), copy_format(c), GX_FALSE);
+          GXCopyTex(token.get(), c.clear && full_rect ? GX_TRUE : GX_FALSE);
           ++counters.texture_copies;
         }
         // GXCopyDisp is a stub. The validated final full-size XFB is presented

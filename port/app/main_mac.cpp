@@ -26,6 +26,10 @@
 #include <vector>
 
 #include <mach-o/dyld.h>
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <SDL3/SDL_main.h>
+#endif
 
 #ifndef MELEE_PORT_VERSION
 #define MELEE_PORT_VERSION "dev"

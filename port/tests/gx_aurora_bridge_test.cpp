@@ -8,6 +8,9 @@
 static void check(bool ok, const char* what) {
   if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); std::exit(1); }
 }
+template<class F> static void accepted(F f, const char* what) {
+  try { f(); } catch (const gx::aurora_bridge::CoverageError& e) { std::fprintf(stderr, "%s: %s\n", what, e.what()); check(false, what); }
+}
 template<class F> static void rejected(F f, const char* needle) {
   try { f(); } catch (const gx::aurora_bridge::CoverageError& e) {
     check(std::string(e.what()).find(needle) != std::string::npos, e.what()); return;
@@ -70,19 +73,19 @@ int main() {
         "immutable image and palette survive source-frame recycling");
 
   auto bad = gx_test::frame(); bad.draws[0].components |= gx::VB_UNCAPTURED_NBT;
-  rejected([&] { gx::aurora_bridge::prepare_frame(bad); }, "NBT");
+  accepted([&] { gx::aurora_bridge::prepare_frame(bad); }, "uncaptured NBT renders with its normal");
   bad = gx_test::frame(); bad.vertices[1].texmtx[0] = 60;
-  rejected([&] { gx::aurora_bridge::prepare_frame(bad); }, "dynamic identity");
+  accepted([&] { gx::aurora_bridge::prepare_frame(bad); }, "dynamic identity texture matrix warns only");
   bad = gx_test::frame(); bad.draws[0].first_vertex = UINT32_MAX;
-  rejected([&] { gx::aurora_bridge::prepare_frame(bad); }, "vertex range");
+  check(gx::aurora_bridge::prepare_frame(bad).draws[0].vertex_count == 0, "an invalid draw is skipped, not the frame");
   bad = gx_test::frame(); bad.copies[0].has_copy_state = false;
   rejected([&] { gx::aurora_bridge::prepare_frame(bad); }, "copy-time BP");
   bad = gx_test::frame(); bad.copies[0].blendmode = 8;
-  rejected([&] { gx::aurora_bridge::prepare_frame(bad); }, "full color/alpha/depth");
+  accepted([&] { gx::aurora_bridge::prepare_frame(bad); }, "non-clearing XFB copy still presents");
   bad = gx_test::frame(); bad.copies[0].filter0 |= 8;
-  rejected([&] { gx::aurora_bridge::prepare_frame(bad); }, "vertical filter");
+  accepted([&] { gx::aurora_bridge::prepare_frame(bad); }, "copy filter is ignored, not rejected");
   bad = gx_test::frame(); bad.copies[0].filter0 = (1u << 12) | (62u << 18); bad.copies[0].filter1 = 1;
-  rejected([&] { gx::aurora_bridge::prepare_frame(bad); }, "vertical filter");
+  accepted([&] { gx::aurora_bridge::prepare_frame(bad); }, "copy filter is ignored, not rejected");
   bad = gx_test::frame(); bad.commands.push_back({gx::FrameCommand::Draw, 0});
   rejected([&] { gx::aurora_bridge::prepare_frame(bad); }, "final command");
   gx::BPMemory changing{};
@@ -104,12 +107,12 @@ int main() {
   auto history = gx::aurora_bridge::advance_copy_history(ordered, {});
   check(history.size() == 1 && history.at(0x4000).bytes == 128, "copy-before-draw retains exact alias interval");
   data->image[0] ^= 1;
-  rejected([&] { gx::aurora_bridge::advance_copy_history(ordered, {}); }, "CPU-modified");
+  accepted([&] { gx::aurora_bridge::advance_copy_history(ordered, {}); }, "CPU-modified copy destination warns only");
   data->image[0] ^= 1;
   auto shrink = ordered; shrink.commands.resize(1); shrink.copies[0].src_w = 4; shrink.copies[0].dest_stride = 64;
-  rejected([&] { gx::aurora_bridge::advance_copy_history(shrink, history); }, "untracked destination tail");
+  accepted([&] { gx::aurora_bridge::advance_copy_history(shrink, history); }, "shape change warns only");
   auto overlap = ordered; overlap.commands.resize(1); overlap.copies[0].dest_addr += 32;
-  rejected([&] { gx::aurora_bridge::advance_copy_history(overlap, history); }, "overlapping copy");
+  accepted([&] { gx::aurora_bridge::advance_copy_history(overlap, history); }, "overlap warns only");
   ordered.commands = {{gx::FrameCommand::Draw, 0}};
   check(gx::aurora_bridge::advance_copy_history(ordered, history).size() == 1, "cross-frame copy identity survives");
   check(gx::aurora_bridge::advance_copy_history(ordered, {}).empty(), "epoch-cleared history does not reuse copy identity");

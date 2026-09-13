@@ -8,14 +8,14 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <bcrypt.h>
+#elif defined(__APPLE__)
+#include <sys/stat.h>
+#include <CommonCrypto/CommonDigest.h>
+#include "slippi_http_apple.h"
 #else
 #include <curl/curl.h>
 #include <sys/stat.h>
-#if defined(__APPLE__)
-#include <CommonCrypto/CommonDigest.h>
-#else
 #include <openssl/md5.h>
-#endif
 #endif
 #include <nlohmann/json.hpp>
 #include <atomic>
@@ -103,6 +103,14 @@ bool http(const char* method, const std::string& url, const std::string& headers
   }
   WinHttpCloseHandle(session);
   return ok;
+}
+#elif defined(__APPLE__)
+// ---- HTTP (NSURLSession, see slippi_http_apple.mm): same contract as the WinHTTP path.
+bool http(const char* method, const std::string& url, const std::string& headers, const std::string& body, int* status, std::string* response) {
+  std::string error;
+  if (apple_http(method, url, headers, body, USER_AGENT, status, response, &error)) return true;
+  host::log("slippi http: %s %s failed: %s", method, url.substr(0, 80).c_str(), error.c_str());
+  return false;
 }
 #else
 // ---- HTTP (libcurl). Same contract as the WinHTTP path: `headers` are CRLF-separated
