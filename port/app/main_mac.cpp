@@ -91,7 +91,7 @@ std::string home_dir() {
 std::string find_sys_dir() {
   if (const char* env = std::getenv("MELEE_SYS_DIR")) return env;
   const fs::path exe = executable_dir();
-  for (const fs::path candidate : {exe / "../Resources/slippi_sys", exe / "../../port/slippi_sys",
+  for (const fs::path candidate : {exe / "slippi_sys", exe / "../Resources/slippi_sys", exe / "../../port/slippi_sys",
                                    exe / "../../../port/slippi_sys", fs::path("port/slippi_sys")}) {
     std::error_code ec;
     if (fs::is_directory(candidate / "GameFiles", ec)) return fs::weakly_canonical(candidate, ec).string();

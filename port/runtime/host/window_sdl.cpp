@@ -9,6 +9,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_metal.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -39,6 +40,56 @@ std::vector<SDL_Gamepad*> g_gamepads;
 InputScript g_script;
 bool g_scripted = false;
 std::atomic<uint32_t> g_match_start{0};
+
+// Touch controls (iPhone, iPad, Apple Vision Pro): the left half is a floating
+// stick whose centre is where the finger landed; the right half holds buttons.
+// Coordinates are normalized to the window. No overlay is drawn yet.
+struct TouchStick { bool active = false; SDL_FingerID finger = 0; float cx = 0, cy = 0, dx = 0, dy = 0; };
+TouchStick g_touch_stick;
+struct TouchButton { float x0, y0, x1, y1; uint16_t button; bool trigger_l, trigger_r; };
+const TouchButton kTouchButtons[] = {
+    {0.78f, 0.62f, 0.93f, 0.88f, GC_A, false, false}, {0.62f, 0.68f, 0.77f, 0.90f, GC_B, false, false},
+    {0.78f, 0.38f, 0.93f, 0.60f, GC_X, false, false}, {0.62f, 0.42f, 0.77f, 0.66f, GC_Y, false, false},
+    {0.94f, 0.38f, 1.00f, 0.88f, GC_Z, false, false},
+    {0.50f, 0.00f, 0.64f, 0.14f, GC_L, true, false},  {0.86f, 0.00f, 1.00f, 0.14f, GC_R, false, true},
+    {0.66f, 0.00f, 0.84f, 0.10f, GC_START, false, false},
+};
+struct TouchPress { SDL_FingerID finger; int button; };
+std::vector<TouchPress> g_touch_presses;
+bool g_touch_seen = false;
+
+void touch_event(const SDL_TouchFingerEvent& e) {
+  g_touch_seen = true;
+  if (e.type == SDL_EVENT_FINGER_DOWN) {
+    if (e.x < 0.5f && !g_touch_stick.active) { g_touch_stick = {true, e.fingerID, e.x, e.y, 0, 0}; return; }
+    for (int i = 0; i < (int)(sizeof kTouchButtons / sizeof kTouchButtons[0]); ++i) {
+      const auto& b = kTouchButtons[i];
+      if (e.x >= b.x0 && e.x < b.x1 && e.y >= b.y0 && e.y < b.y1) { g_touch_presses.push_back({e.fingerID, i}); return; }
+    }
+  } else if (e.type == SDL_EVENT_FINGER_MOTION) {
+    if (g_touch_stick.active && e.fingerID == g_touch_stick.finger) { g_touch_stick.dx = e.x - g_touch_stick.cx; g_touch_stick.dy = e.y - g_touch_stick.cy; }
+  } else {
+    if (g_touch_stick.active && e.fingerID == g_touch_stick.finger) g_touch_stick.active = false;
+    for (auto it = g_touch_presses.begin(); it != g_touch_presses.end();) { if (it->finger == e.fingerID) it = g_touch_presses.erase(it); else ++it; }
+  }
+}
+
+void read_touch(PadState& p) {
+  if (!g_touch_seen) return;
+  p.err = 0;
+  if (g_touch_stick.active) {
+    // A 12% window-width travel is full deflection; the aspect ratio keeps y in the same units.
+    const float scale = 127.0f / 0.12f;
+    int sx = (int)(g_touch_stick.dx * scale), sy = (int)(-g_touch_stick.dy * scale * (float)g_client_w / (float)std::max(g_client_h, 1));
+    p.stick_x = (int8_t)std::clamp(sx, -127, 127); p.stick_y = (int8_t)std::clamp(sy, -127, 127);
+  }
+  for (const TouchPress& press : g_touch_presses) {
+    const auto& b = kTouchButtons[press.button];
+    p.button |= b.button;
+    if (b.trigger_l) p.trig_l = 255;
+    if (b.trigger_r) p.trig_r = 255;
+  }
+}
 
 std::string narrow(const wchar_t* text) {
   std::string out;
@@ -204,6 +255,9 @@ void window_pump() {
       case SDL_EVENT_KEY_DOWN:
         if (event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT) && !event.key.repeat) g_fullscreen_toggle.store(true);
         break;
+      case SDL_EVENT_FINGER_DOWN: case SDL_EVENT_FINGER_MOTION: case SDL_EVENT_FINGER_UP: case SDL_EVENT_FINGER_CANCELED:
+        touch_event(event.tfinger);
+        break;
       default: break;
     }
   }
@@ -270,6 +324,6 @@ void input_poll(PadState out[4]) {
     read_gamepad(pad, out[port]);
     ++port;
   }
-  if (!(adapter_mask & 1u)) { out[0].err = 0; read_keyboard(out[0]); }
+  if (!(adapter_mask & 1u)) { out[0].err = 0; read_keyboard(out[0]); read_touch(out[0]); }
 }
 }  // namespace host

@@ -359,6 +359,11 @@ if(MELEE_BUILD_PORT_HEADLESS)
 endif()
 
 if(MELEE_BUILD_PORT_METAL)
+  if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "visionOS" OR CMAKE_SYSTEM_NAME STREQUAL "tvOS")
+    set(MELEE_DEVICE_TARGET ON)
+  else()
+    set(MELEE_DEVICE_TARGET OFF)
+  endif()
   # Pinned Aurora (encounter/aurora) provides the SDL3 Cocoa window, the Dawn/WebGPU
   # Metal device, and the GX translation that consumes the bridge's normalized commands.
   set(MELEE_AURORA_DIR "${PROJECT_SOURCE_DIR}/build/deps/aurora" CACHE PATH "Pinned Aurora source checkout")
@@ -377,16 +382,20 @@ if(MELEE_BUILD_PORT_METAL)
   set(AURORA_ENABLE_DVD OFF CACHE BOOL "" FORCE)
   set(AURORA_ENABLE_CARD OFF CACHE BOOL "" FORCE)
   set(AURORA_ENABLE_THP OFF CACHE BOOL "" FORCE)
-  if(IOS OR VISIONOS)
+  if(MELEE_DEVICE_TARGET)
     set(AURORA_CACHE_USE_ZSTD OFF CACHE BOOL "" FORCE)   # no Homebrew zstd on device targets
     set(AURORA_ENABLE_GX OFF CACHE BOOL "" FORCE)        # only SDL3 is needed; the app renders with Metal directly
+  else()
+    set(AURORA_ENABLE_GX ON CACHE BOOL "" FORCE)
   endif()
   add_subdirectory("${MELEE_AURORA_DIR}" "${PROJECT_BINARY_DIR}/aurora" EXCLUDE_FROM_ALL)
   foreach(aurora_target aurora_core aurora_gx)
-    target_compile_options(${aurora_target} PRIVATE $<$<CONFIG:Debug>:-O2>)
+    if(TARGET ${aurora_target})
+      target_compile_options(${aurora_target} PRIVATE $<$<CONFIG:Debug>:-O2>)
+    endif()
   endforeach()
 
-  if(NOT IOS AND NOT VISIONOS)
+  if(NOT MELEE_DEVICE_TARGET)
   add_library(runtime_metal STATIC ${PORT_PORTABLE_RUNTIME_SOURCES}
     runtime/host/input_sdl.cpp runtime/host/audio_sdl.cpp runtime/host/gc_adapter_none.cpp
     runtime/host/window_metal.cpp runtime/host/metal_frontend.cpp runtime/host/metal_frontend_aurora.cpp
@@ -432,14 +441,14 @@ endif()
   if(PkgConfig_FOUND)
     pkg_check_modules(LIBUSB IMPORTED_TARGET libusb-1.0)
   endif()
-  if(LIBUSB_FOUND AND NOT IOS)
+  if(LIBUSB_FOUND AND NOT MELEE_DEVICE_TARGET)
     set(PORT_GC_ADAPTER_SOURCE runtime/host/gc_adapter_libusb.cpp)
     message(STATUS "GameCube adapter: libusb ${LIBUSB_VERSION}")
   else()
     set(PORT_GC_ADAPTER_SOURCE runtime/host/gc_adapter_none.cpp)
     message(STATUS "GameCube adapter: libusb-1.0 not found; WUP-028 support disabled")
   endif()
-  if(IOS)
+  if(MELEE_DEVICE_TARGET)
     set(PORT_APPLE_LAUNCHER_SOURCE runtime/host/ios_launcher.mm)
     set(PORT_APPLE_UI_FRAMEWORK "-framework UIKit")
   else()
@@ -464,13 +473,13 @@ endif()
   target_link_libraries(runtime_mac PUBLIC native_animation port_build_options Threads::Threads port_enet
     Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation" "-framework Metal" "-framework QuartzCore"
     ${AURORA_SDL3_TARGET})
-  if(LIBUSB_FOUND AND NOT IOS)
+  if(LIBUSB_FOUND AND NOT MELEE_DEVICE_TARGET)
     target_link_libraries(runtime_mac PUBLIC PkgConfig::LIBUSB)
   endif()
   add_dependencies(runtime_mac port_verify_generated)
 
   add_executable(melee_port_mac app/main_mac.cpp)
-  if(IOS OR VISIONOS)
+  if(MELEE_DEVICE_TARGET)
     set_target_properties(melee_port_mac PROPERTIES
       MACOSX_BUNDLE TRUE OUTPUT_NAME "MeleeUnlocked"
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/app/ios/Info.plist.in"
