@@ -3,6 +3,7 @@
 // replace physical devices when present.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "host.h"
+#include "input_config.h"
 #include "input_script.h"
 #include "overlay.h"
 #include "window.h"
@@ -42,6 +43,11 @@ PadState g_ui_pad{};
 bool g_ui_gamecube = false;
 int g_client_w = 0, g_client_h = 0;
 std::vector<SDL_Gamepad*> g_gamepads;
+std::string gamepad_guid(SDL_Gamepad* pad) {
+  char buf[64];
+  SDL_GUIDToString(SDL_GetGamepadGUIDForID(SDL_GetGamepadID(pad)), buf, sizeof buf);
+  return buf;
+}
 SDL_JoystickID g_gamepad_port[4] = {0, 0, 0, 0};   // GameCube port -> gamepad instance id (set by input_poll; 0 = none)
 InputScript g_script;
 bool g_scripted = false;
@@ -70,7 +76,7 @@ TouchLayout g_touch;
 struct Finger { SDL_FingerID id; float x, y; };
 std::vector<Finger> g_fingers;
 bool g_touch_seen = false, g_touch_forced = false;
-float g_touch_opacity = 1.0f, g_touch_alpha = 0.0f, g_pixels_per_point = 1.0f, g_touch_aspect = 4.0f / 3.0f;
+float g_touch_opacity = 1.0f, g_touch_alpha = 0.0f, g_pixels_per_point = 1.0f, g_touch_aspect = 4.0f / 3.0f, g_touch_scale = 1.0f;
 std::mutex g_touch_mutex;   // events arrive on the main thread; input_poll and the overlay run on others
 
 Rect circle(float cx, float cy, float r) { return {cx - r, cy - r, cx + r, cy + r}; }
@@ -86,7 +92,7 @@ void touch_layout() {
   const bool portrait = H_full > W * 1.05f;
   const float top = portrait ? W / g_touch_aspect : 0.0f, H = std::max(H_full - top, 120.0f);
   const float col_h = H - 2 * pad;
-  const float col_w = portrait ? std::min(W * 0.42f, 320.0f * t.pt) : std::min(std::max(200.0f * t.pt, H * 0.36f), W * 0.28f);
+  const float col_w = (portrait ? std::min(W * 0.42f, 320.0f * t.pt) : std::min(std::max(200.0f * t.pt, H * 0.36f), W * 0.28f)) * g_touch_scale;
   const float trig_h = col_h * 0.13f, mid = std::min(col_w, col_h * 0.60f), row_h = col_h * 0.27f;
   const float gap = 16.0f * t.pt, btn_d = std::max(std::min(row_h, col_w * 0.42f), 8.0f);
   auto column = [&](float x0, bool left) {
@@ -222,6 +228,7 @@ bool touch_overlay(OverlayFrame& out) {
 }
 void touch_set_opacity(float opacity) { std::lock_guard<std::mutex> lock(g_touch_mutex); g_touch_opacity = std::clamp(opacity, 0.0f, 1.0f); }
 void touch_force_visible(bool visible) { std::lock_guard<std::mutex> lock(g_touch_mutex); g_touch_forced = visible; }
+void touch_set_scale(float scale) { std::lock_guard<std::mutex> lock(g_touch_mutex); g_touch_scale = std::clamp(scale, 0.7f, 1.4f); g_touch.w = 0; }
 void touch_set_game_aspect(float aspect) { std::lock_guard<std::mutex> lock(g_touch_mutex); g_touch_aspect = aspect > 0.0f ? aspect : 4.0f / 3.0f; g_touch.w = 0; }
 
 namespace {
@@ -269,25 +276,32 @@ int8_t axis_to_stick(Sint16 v, int deadzone) {
 // Xbox/PlayStation-layout gamepads mapped the way Dolphin's default profile does.
 void read_gamepad(SDL_Gamepad* pad, PadState& p) {
   p.err = 0;
-  auto btn = [&](SDL_GamepadButton b) { return SDL_GetGamepadButton(pad, b); };
-  if (btn(SDL_GAMEPAD_BUTTON_SOUTH)) p.button |= GC_A;
-  if (btn(SDL_GAMEPAD_BUTTON_WEST)) p.button |= GC_B;
-  if (btn(SDL_GAMEPAD_BUTTON_EAST)) p.button |= GC_X;
-  if (btn(SDL_GAMEPAD_BUTTON_NORTH)) p.button |= GC_Y;
-  if (btn(SDL_GAMEPAD_BUTTON_START)) p.button |= GC_START;
-  if (btn(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) p.button |= GC_Z;
-  if (btn(SDL_GAMEPAD_BUTTON_DPAD_UP)) p.button |= GC_UP;
-  if (btn(SDL_GAMEPAD_BUTTON_DPAD_DOWN)) p.button |= GC_DOWN;
-  if (btn(SDL_GAMEPAD_BUTTON_DPAD_LEFT)) p.button |= GC_LEFT;
-  if (btn(SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) p.button |= GC_RIGHT;
-  const Sint16 lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX), ly = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
-  const Sint16 rx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX), ry = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
-  if (std::abs(lx) > 7849 || std::abs(ly) > 7849) { p.stick_x = axis_to_stick(lx, 0); p.stick_y = axis_to_stick((Sint16)std::clamp(-(int)ly, -32767, 32767), 0); }
-  if (std::abs(rx) > 8689 || std::abs(ry) > 8689) { p.sub_x = axis_to_stick(rx, 0); p.sub_y = axis_to_stick((Sint16)-ry, 0); }
+  const ControllerConfig* cfg = controller_config_for(gamepad_guid(pad));
+  const ControllerMap map = cfg ? cfg->map : ControllerMap::defaults();
+  static const uint16_t gc_bits[GC_CTL_COUNT] = {GC_A, GC_B, GC_X, GC_Y, GC_Z, GC_L, GC_R, GC_START, GC_UP, GC_DOWN, GC_LEFT, GC_RIGHT};
   const int lt = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) / 128, rt = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) / 128;
-  if (lt > 30) { p.trig_l = (uint8_t)std::min(lt, 255); if (lt > 200) p.button |= GC_L; }
-  if (rt > 30) { p.trig_r = (uint8_t)std::min(rt, 255); if (rt > 200) p.button |= GC_R; }
-  if (btn(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) { p.button |= GC_L; p.trig_l = 255; }
+  auto pressed = [&](int input, uint8_t* analog) -> bool {
+    if (input == kUnbound) return false;
+    if (input == kTriggerLeft || input == kTriggerRight) {
+      const int v = input == kTriggerLeft ? lt : rt;
+      if (analog && v > 30) *analog = (uint8_t)std::min(v, 255);
+      return v > 200;
+    }
+    return SDL_GetGamepadButton(pad, (SDL_GamepadButton)input);
+  };
+  for (int i = 0; i < GC_CTL_COUNT; ++i) {
+    uint8_t* analog = i == GC_CTL_L ? &p.trig_l : i == GC_CTL_R ? &p.trig_r : nullptr;
+    if (pressed(map.binding[i], analog)) {
+      p.button |= gc_bits[i];
+      if (i == GC_CTL_L && map.binding[i] != kTriggerLeft && map.binding[i] != kTriggerRight) p.trig_l = 255;   // digital L/R press = full trigger
+      if (i == GC_CTL_R && map.binding[i] != kTriggerLeft && map.binding[i] != kTriggerRight) p.trig_r = 255;
+    }
+  }
+  Sint16 lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX), ly = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
+  Sint16 rx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX), ry = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
+  if (map.swap_sticks) { std::swap(lx, rx); std::swap(ly, ry); }
+  if (std::abs(lx) > 7849 || std::abs(ly) > 7849) { p.stick_x = axis_to_stick(lx, 0); p.stick_y = axis_to_stick((Sint16)std::clamp(-(int)ly, -32767, 32767), 0); }
+  if (std::abs(rx) > 8689 || std::abs(ry) > 8689) { p.sub_x = axis_to_stick(rx, 0); p.sub_y = axis_to_stick((Sint16)std::clamp(-(int)ry, -32767, 32767), 0); }
 }
 
 void read_keyboard(PadState& p) {
@@ -409,6 +423,45 @@ void window_pump() {
 }
 
 void window_set_fullscreen(bool enabled) { if (g_window) SDL_SetWindowFullscreen(g_window, enabled); }
+
+// ---- launcher services: controllers without a window
+void window_input_init() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+  if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD | SDL_INIT_EVENTS)) { log("input: SDL gamepad init failed: %s", SDL_GetError()); return; }
+  int count = 0;
+  if (SDL_JoystickID* ids = SDL_GetGamepads(&count)) { for (int i = 0; i < count; ++i) open_gamepad(ids[i]); SDL_free(ids); }
+}
+std::vector<ControllerInfo> window_list_controllers() {
+  std::vector<ControllerInfo> list;
+  SDL_PumpEvents();
+  SDL_Event event;
+  while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_GAMEPAD_ADDED, SDL_EVENT_GAMEPAD_REMOVED) > 0) {
+    if (event.type == SDL_EVENT_GAMEPAD_ADDED) open_gamepad(event.gdevice.which);
+    else if (event.type == SDL_EVENT_GAMEPAD_REMOVED) close_gamepad(event.gdevice.which);
+  }
+  for (SDL_Gamepad* pad : g_gamepads) {
+    ControllerInfo info;
+    info.name = SDL_GetGamepadName(pad) ? SDL_GetGamepadName(pad) : "Controller";
+    info.guid = gamepad_guid(pad);
+    info.instance_id = SDL_GetGamepadID(pad);
+    if (const ControllerConfig* cfg = controller_config_for(info.guid)) info.assigned_port = cfg->port;
+    list.push_back(info);
+  }
+  return list;
+}
+int window_capture_input(const std::string& guid) {
+  SDL_PumpEvents();
+  for (SDL_Gamepad* pad : g_gamepads) {
+    if (gamepad_guid(pad) != guid) continue;
+    for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; ++b) if (SDL_GetGamepadButton(pad, (SDL_GamepadButton)b)) return b;
+    if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) return kTriggerLeft;
+    if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) return kTriggerRight;
+  }
+  return kUnbound;
+}
 // Rumble for a GameCube port served by an SDL gamepad (DualSense, Xbox, MFi, Switch Pro...).
 void window_gamepad_rumble(int port, bool on) {
   if (port < 0 || port >= 4 || !g_gamepad_port[port]) return;
@@ -464,14 +517,21 @@ void input_poll(PadState out[4]) {
   const uint32_t adapter_mask = gcadapter_poll(out);
   ui.gamecube = (adapter_mask & 1u) != 0;
   // Gamepads fill ports in connection order after the adapter's; the keyboard adds to port 1.
-  int port = 0;
   for (int i = 0; i < 4; ++i) g_gamepad_port[i] = 0;
+  // Gamepads with a fixed port take it first; the rest fill free ports in connection order.
+  bool taken[4] = {(adapter_mask & 1u) != 0, (adapter_mask & 2u) != 0, (adapter_mask & 4u) != 0, (adapter_mask & 8u) != 0};
+  std::vector<SDL_Gamepad*> floating;
   for (SDL_Gamepad* pad : g_gamepads) {
-    while (port < 4 && (adapter_mask & (1u << port))) ++port;
+    const ControllerConfig* cfg = controller_config_for(gamepad_guid(pad));
+    const int fixed = cfg ? cfg->port : 0;
+    if (fixed >= 1 && fixed <= 4 && !taken[fixed - 1]) { taken[fixed - 1] = true; read_gamepad(pad, out[fixed - 1]); g_gamepad_port[fixed - 1] = SDL_GetGamepadID(pad); }
+    else floating.push_back(pad);
+  }
+  int port = 0;
+  for (SDL_Gamepad* pad : floating) {
+    while (port < 4 && taken[port]) ++port;
     if (port >= 4) break;
-    read_gamepad(pad, out[port]);
-    g_gamepad_port[port] = SDL_GetGamepadID(pad);
-    ++port;
+    taken[port] = true; read_gamepad(pad, out[port]); g_gamepad_port[port] = SDL_GetGamepadID(pad); ++port;
   }
   if (!(adapter_mask & 1u)) { out[0].err = 0; read_keyboard(out[0]); read_touch(out[0]); }
 }

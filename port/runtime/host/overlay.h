@@ -26,5 +26,6 @@ bool touch_overlay(OverlayFrame& out);
 void touch_set_opacity(float opacity);    // 0..1, user setting
 void touch_force_visible(bool visible);   // show even without a touch screen (development)
 void touch_set_game_aspect(float aspect);  // 4:3 or 16:9; portrait layouts put the controls below the game
+void touch_set_scale(float scale);         // control size multiplier, 0.7..1.4
 void haptic_tap(bool strong);             // physical feedback on supported devices
 }  // namespace host

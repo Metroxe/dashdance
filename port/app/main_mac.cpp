@@ -8,6 +8,7 @@
 #include "gx_metal.h"
 #include "overlay.h"
 #include "slippi_login.h"
+#include "input_config.h"
 #include "hle_dvd.h"
 #include "host.h"
 #include "mac_launcher.h"
@@ -210,6 +211,18 @@ int main(int argc, char** argv) {
       else if (const char* v = value("online=")) settings.online = *v == '1';
       else if (const char* v = value("sharpness=")) settings.sharpness = std::clamp((float)std::atof(v), 0.0f, 1.0f);
       else if (const char* v = value("overlay=")) settings.overlay_opacity = std::clamp((float)std::atof(v), 0.0f, 1.0f);
+      else if (const char* v = value("overlay_scale=")) settings.overlay_scale = std::clamp((float)std::atof(v), 0.7f, 1.4f);
+      else if (const char* v = value("scale=")) settings.scale = std::clamp(std::atoi(v), 0, 8);
+      else if (const char* v = value("anisotropy=")) settings.anisotropy = std::clamp(std::atoi(v), 1, 16);
+      else if (const char* v = value("vsync=")) settings.vsync = *v != '0';
+      else if (const char* v = value("fullscreen=")) settings.fullscreen = *v == '1';
+      else if (const char* v = value("controller.")) {   // controller.<guid>=<port>|<mapping>
+        std::string rest = v; size_t eq = rest.find('='), bar = rest.find('|', eq == std::string::npos ? 0 : eq);
+        if (eq != std::string::npos && bar != std::string::npos) {
+          host::ControllerConfig c; c.guid = rest.substr(0, eq); c.port = std::clamp(std::atoi(rest.c_str() + eq + 1), 0, 4);
+          c.map = host::ControllerMap::parse(rest.substr(bar + 1)); host::upsert_controller_config(c);
+        }
+      }
     }
   }
   // Slippi login: this app's own user.json (native sign-in) wins over the Slippi Launcher's file.
@@ -238,19 +251,26 @@ int main(int argc, char** argv) {
       if (fs::is_regular_file(iso_arg, ec)) settings.iso = iso_arg;
       else previous_error = "There is no disc image at " + iso_arg;
     }
+    host::window_input_init();   // controllers are listed and remapped in the launcher
+    settings.replay_dir = replay_dir.empty() ? (support / "Replays").string() : replay_dir;
     if (!host::launcher_run(settings, previous_error) || settings.iso.empty()) return 0;
     iso_arg = settings.iso;
     if (!settings.online) offline = true;
     if (ensure_dir(support.string(), "support")) {
       std::ofstream out(remembered, std::ios::trunc);
       out << "iso=" << settings.iso << "\nwidescreen=" << (settings.widescreen ? 1 : 0) << "\nonline=" << (settings.online ? 1 : 0)
-          << "\nsharpness=" << settings.sharpness << "\noverlay=" << settings.overlay_opacity << "\n";
+          << "\nsharpness=" << settings.sharpness << "\noverlay=" << settings.overlay_opacity << "\noverlay_scale=" << settings.overlay_scale
+          << "\nscale=" << settings.scale << "\nanisotropy=" << settings.anisotropy << "\nvsync=" << (settings.vsync ? 1 : 0)
+          << "\nfullscreen=" << (settings.fullscreen ? 1 : 0) << "\n";
+      for (const host::ControllerConfig& c : host::controller_configs()) out << "controller." << c.guid << "=" << c.port << "|" << c.map.serialize() << "\n";
     }
   }
   // Command-line flags win over remembered launcher values.
   host::touch_set_opacity(overlay_opacity_arg >= 0.0f ? overlay_opacity_arg : settings.overlay_opacity);
   gfx.widescreen = widescreen_arg || settings.widescreen;
   gfx.sharpness = sharpness_arg >= 0.0f ? sharpness_arg : settings.sharpness;
+  if (show_launcher) { gfx.efb_scale = settings.scale; gfx.anisotropy = settings.anisotropy; gfx.vsync = settings.vsync; }
+  host::touch_set_scale(settings.overlay_scale);
   host::touch_set_game_aspect(gfx.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f);
   if (profile_dir.empty()) profile_dir = (support / "User").string();
   if (card_dir.empty()) card_dir = (fs::path(profile_dir) / "GC/CardA").string();
@@ -308,6 +328,7 @@ int main(int argc, char** argv) {
     backend = gx::create_metal_backend(layer, client_w, client_h, gfx);
     host::log("display: %.0f Hz refresh; the game simulates at 60 Hz and each frame is shown on the next refresh slot", host::window_refresh_rate());
     host::window_set_resize_callback([backend](int w, int h) { gx::metal_resize(backend, w, h); });
+    if (settings.fullscreen) host::window_set_fullscreen(true);
     gx::metal_set_overlay(backend, host::touch_overlay);
     host::g_has_window = true;
     gx::init(backend);

@@ -9,7 +9,15 @@ struct LauncherSettings {
   bool widescreen = false;
   float sharpness = 0.0f;      // 0..1
   float overlay_opacity = 1.0f;// on-screen controller (touch devices)
+  float overlay_scale = 1.0f;  // 0.7..1.4
   bool online = true;          // Slippi Online services
+  int scale = 0;               // internal resolution multiplier, 0 = auto
+  int anisotropy = 16;         // 1, 4, 16
+  bool vsync = true;           // display sync; off = uncapped presentation
+  bool fullscreen = false;     // macOS: start in full screen
+  int display_hz = 60;         // informational: the display's maximum refresh rate
+  std::string replay_dir;      // for the recent-games list
+  std::string gpu_name;        // informational
   std::string slippi_dir;      // where this app keeps its own user.json (native sign-in)
   std::string account_name, account_code;   // current login, if any
   bool account_from_launcher = false;       // login comes from the Slippi Launcher's file (macOS)
