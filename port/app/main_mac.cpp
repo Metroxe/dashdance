@@ -328,6 +328,7 @@ int main(int argc, char** argv) {
     void* layer = host::window_create((int)window_w, (int)window_h, L"iSlippi", true);
     int client_w = 0, client_h = 0;
     host::window_client_size(&client_w, &client_h);
+    gfx.cache_dir = cache_dir;
     backend = gx::create_metal_backend(layer, client_w, client_h, gfx);
     host::log("display: %.0f Hz refresh; the game simulates at 60 Hz and each frame is shown on the next refresh slot", host::window_refresh_rate());
     host::window_set_resize_callback([backend](int w, int h) { gx::metal_resize(backend, w, h); });

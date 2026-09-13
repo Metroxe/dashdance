@@ -22,6 +22,7 @@
 #include <cstring>
 #include <fstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace gx {
@@ -238,6 +239,8 @@ class MetalBackend final : public Backend {
     clear_pipeline_ = make("clear_vs", "clear_ps", MTLPixelFormatRGBA8Unorm, true, false);
     overlay_pipeline_ = make("overlay_vs", "overlay_ps", MTLPixelFormatBGRA8Unorm, false, true);
     create_overlay_atlas();
+    if (!opts_.capture_path.empty()) async_compile_ = false;   // captured frames must be complete and deterministic
+    precompile_from_cache();
     MTLDepthStencilDescriptor* ds = [MTLDepthStencilDescriptor new];
     ds.depthCompareFunction = MTLCompareFunctionAlways; ds.depthWriteEnabled = YES;
     clear_depth_state_ = [device_ newDepthStencilStateWithDescriptor:ds];
@@ -320,6 +323,10 @@ class MetalBackend final : public Backend {
     return state;
   }
 
+  // A pipeline is looked up by (shader hashes, blend, depth, EFB format, topology). Misses are
+  // compiled in the background and the draw is skipped until the state arrives (a frame or two,
+  // the first time a stage or effect is seen); with MELEE_METAL_SYNC_COMPILE=1, or when frames
+  // are being captured, the compile happens inline so output is deterministic.
   id<MTLRenderPipelineState> get_pipeline(const DrawCall& dc, MTLPrimitiveType prim) {
     if (dc.cached_pipeline && dc.cached_pipeline_owner == backend_id_) return (__bridge id<MTLRenderPipelineState>)dc.cached_pipeline;
     VSUid vsu = make_vs_uid(dc);
@@ -332,8 +339,23 @@ class MetalBackend final : public Backend {
       dc.cached_pipeline_owner = backend_id_; dc.cached_pipeline = (__bridge void*)it->second;
       return it->second;
     }
+    record_pipeline(key, vsu, psu);
+    if (async_compile_) {
+      if (!pending_.count(key)) { pending_.insert(key); start_compile_job(key, vsu, psu); }
+      return nil;
+    }
     id<MTLFunction> vs = vertex_function(vh, vsu);
     id<MTLFunction> ps = pixel_function(ph, psu);
+    const double t0 = host::now_seconds();
+    id<MTLRenderPipelineState> state = build_pipeline(key, vs, ps);
+    pso_ms_ += (host::now_seconds() - t0) * 1000.0; ++psos_;
+    if (!state) return nil;
+    pipelines_[key] = state;
+    dc.cached_pipeline_owner = backend_id_; dc.cached_pipeline = (__bridge void*)state;
+    return state;
+  }
+  MTLRenderPipelineDescriptor* make_descriptor(const PsoKey& key, id<MTLFunction> vs, id<MTLFunction> ps) {
+    const uint32_t topology = key.topology;
     MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
     d.vertexFunction = vs; d.fragmentFunction = ps;
     d.vertexDescriptor = vertex_descriptor_;
@@ -357,20 +379,95 @@ class MetalBackend final : public Backend {
     ca.rgbBlendOperation = bits(bm, 11, 1) ? MTLBlendOperationReverseSubtract : MTLBlendOperationAdd;
     ca.sourceAlphaBlendFactor = MTLBlendFactorOne; ca.destinationAlphaBlendFactor = MTLBlendFactorZero; ca.alphaBlendOperation = MTLBlendOperationAdd;
     ca.writeMask = (bits(bm, 3, 1) ? (MTLColorWriteMaskRed | MTLColorWriteMaskGreen | MTLColorWriteMaskBlue) : 0) | (bits(bm, 4, 1) ? MTLColorWriteMaskAlpha : 0);
+    return d;
+  }
+  id<MTLRenderPipelineState> build_pipeline(const PsoKey& key, id<MTLFunction> vs, id<MTLFunction> ps) {
+    if (!vs || !ps) return nil;
     NSError* error = nil;
-    const double t0 = host::now_seconds();
-    id<MTLRenderPipelineState> state = [device_ newRenderPipelineStateWithDescriptor:d error:&error];
-    pso_ms_ += (host::now_seconds() - t0) * 1000.0; ++psos_;
-    if (!state) {
-      host::log("metal: pipeline build failed: %s", error.localizedDescription.UTF8String);
-      return nil;
-    }
-    pipelines_[key] = state;
-    dc.cached_pipeline_owner = backend_id_; dc.cached_pipeline = (__bridge void*)state;
+    id<MTLRenderPipelineState> state = [device_ newRenderPipelineStateWithDescriptor:make_descriptor(key, vs, ps) error:&error];
+    if (!state) host::log("metal: pipeline build failed: %s", error.localizedDescription.UTF8String);
     return state;
   }
 
-  id<MTLFunction> compile(const std::string& source, const char* entry, const char* what, uint64_t hash) {
+  // ---- background compilation
+  id<MTLFunction> async_function(bool vertex, uint64_t hash, const VSUid& vsu, const PSUid& psu) {
+    {
+      std::lock_guard<std::mutex> lock(async_mutex_);
+      auto& cache = vertex ? async_vs_ : async_ps_;
+      auto it = cache.find(hash);
+      if (it != cache.end()) return it->second;
+    }
+    bool early = false;
+    id<MTLFunction> f = vertex ? compile(msl::vertex(generate_vertex_shader(vsu), vsu.numTexGens), "vs_main", "vertex shader", hash, false)
+                               : compile(msl::pixel(generate_pixel_shader(psu), psu.numTexGens, &early), "ps_main", "pixel shader", hash, false);
+    std::lock_guard<std::mutex> lock(async_mutex_);
+    (vertex ? async_vs_ : async_ps_)[hash] = f;
+    return f;
+  }
+  void start_compile_job(const PsoKey& key, const VSUid& vsu, const PSUid& psu) {
+    if (!compile_queue_) {
+      dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_CONCURRENT, QOS_CLASS_USER_INITIATED, 0);
+      compile_queue_ = dispatch_queue_create("app.islippi.metal.compile", attr);
+    }
+    __block MetalBackend* self_ = this;
+    const PsoKey k = key; const VSUid v = vsu; const PSUid ps_uid = psu;
+    dispatch_async(compile_queue_, ^{
+      const double t0 = host::now_seconds();
+      id<MTLFunction> vs = self_->async_function(true, k.vs, v, ps_uid);
+      id<MTLFunction> ps = self_->async_function(false, k.ps, v, ps_uid);
+      id<MTLRenderPipelineState> state = self_->build_pipeline(k, vs, ps);
+      std::lock_guard<std::mutex> lock(self_->async_mutex_);
+      self_->ready_.push_back({k, state});
+      self_->async_ms_ += (host::now_seconds() - t0) * 1000.0; ++self_->async_done_;
+    });
+  }
+  // Render thread, once per frame: adopt finished pipelines.
+  void drain_ready() {
+    std::vector<std::pair<PsoKey, id<MTLRenderPipelineState>>> ready;
+    { std::lock_guard<std::mutex> lock(async_mutex_); ready.swap(ready_); }
+    for (auto& r : ready) { pipelines_[r.first] = r.second; pending_.erase(r.first); }
+    if (frame_counter_ % 60 == 0) {
+      unsigned done; double ms;
+      { std::lock_guard<std::mutex> lock(async_mutex_); done = async_done_; ms = async_ms_; async_done_ = 0; async_ms_ = 0; }
+      if (done) host::log("metal: %u pipelines compiled in the background (%.0f ms of compiler time, %zu still pending)", done, ms, pending_.size());
+    }
+  }
+  // Every pipeline ever needed is appended to <cache_dir>/pipelines.bin; the next launch compiles
+  // the whole list in the background while the game boots, so a stage seen once never stalls again.
+  void record_pipeline(const PsoKey& key, const VSUid& vsu, const PSUid& psu) {
+    if (opts_.cache_dir.empty() || known_.count(key)) return;
+    known_.insert(key);
+    const std::string path = opts_.cache_dir + "/pipelines.bin";
+    std::ofstream f(path, std::ios::binary | std::ios::app);
+    if (!f) return;
+    if (f.tellp() == 0) { const uint32_t header[3] = {0x4C504D31u, (uint32_t)sizeof(VSUid), (uint32_t)sizeof(PSUid)}; f.write((const char*)header, sizeof header); }
+    const uint32_t fields[4] = {key.blend, key.zmode, key.pixel_format, key.topology};
+    f.write((const char*)fields, sizeof fields);
+    f.write((const char*)&vsu, sizeof vsu);
+    f.write((const char*)&psu, sizeof psu);
+  }
+  void precompile_from_cache() {
+    if (opts_.cache_dir.empty() || !async_compile_) return;
+    std::ifstream f(opts_.cache_dir + "/pipelines.bin", std::ios::binary);
+    if (!f) return;
+    uint32_t header[3] = {};
+    f.read((char*)header, sizeof header);
+    if (!f || header[0] != 0x4C504D31u || header[1] != sizeof(VSUid) || header[2] != sizeof(PSUid)) { host::log("metal: ignoring an incompatible pipeline cache"); return; }
+    size_t count = 0;
+    for (;;) {
+      uint32_t fields[4]; VSUid vsu; PSUid psu;
+      f.read((char*)fields, sizeof fields); f.read((char*)&vsu, sizeof vsu); f.read((char*)&psu, sizeof psu);
+      if (!f) break;
+      PsoKey key{vsu.hash(), psu.hash(), fields[0], fields[1], fields[2], fields[3]};
+      if (known_.count(key)) continue;
+      known_.insert(key); pending_.insert(key);
+      start_compile_job(key, vsu, psu);
+      ++count;
+    }
+    if (count) host::log("metal: compiling %zu pipelines from the previous session in the background", count);
+  }
+
+  id<MTLFunction> compile(const std::string& source, const char* entry, const char* what, uint64_t hash, bool count = true) {
     NSError* error = nil;
     if (const char* dir = std::getenv("MELEE_MSL_DUMP")) {   // developer aid: every compiled shader as a file
       std::ofstream dump(std::string(dir) + "/" + what + "_" + std::to_string(hash) + ".metal");
@@ -380,7 +477,7 @@ class MetalBackend final : public Backend {
     options.fastMathEnabled = NO;
     const double t0 = host::now_seconds();
     id<MTLLibrary> lib = [device_ newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()] options:options error:&error];
-    compile_ms_ += (host::now_seconds() - t0) * 1000.0; ++compiles_;
+    if (count) { compile_ms_ += (host::now_seconds() - t0) * 1000.0; ++compiles_; }
     if (!lib) {
       host::log("metal: %s %016llX failed: %s", what, (unsigned long long)hash, error.localizedDescription.UTF8String);
       if (shader_failures_++ < 4) {
@@ -811,6 +908,7 @@ class MetalBackend final : public Backend {
       vertex_ring_[slot_].used = index_ring_[slot_].used = constant_ring_[slot_].used = 0;
       ring_full_logged_ = false;
       draws_this_frame_ = 0;
+      if (async_compile_) drain_ready();
       command_ = [queue_ commandBuffer];
       drawable_ = nil;
       bool presented = false;
@@ -834,6 +932,7 @@ class MetalBackend final : public Backend {
         [command_ presentDrawable:drawable_];
         // Latency accounting: XFB copy on the simulation thread -> pixels on the panel. The
         // window average and worst are logged every 60 presented frames (MELEE_METAL_LATENCY=1).
+#if !TARGET_OS_SIMULATOR   // presented-time APIs do not exist in the Simulator SDK
         if (latency_log_ || phase_lock_) {
           const double submitted = frame.time > 0.0 ? frame.time : host::now_seconds();
           const double render_start = CACurrentMediaTime();
@@ -844,6 +943,7 @@ class MetalBackend final : public Backend {
             self_->latency_note((presented + clock_offset - submitted) * 1000.0, (presented - render_start) * 1000.0);
           }];
         }
+#endif
       }
       dispatch_semaphore_t semaphore = frame_semaphore_;
       __block MetalBackend* self_gpu = this;
@@ -942,7 +1042,14 @@ class MetalBackend final : public Backend {
   bool efb_needs_clear_ = true, skip_present_ = false, ring_full_logged_ = false, pending_capture_ = false;
   int scale_ = 1, efb_w_ = EFB_WIDTH, efb_h_ = EFB_HEIGHT, slot_ = 0;
   uint64_t frame_counter_ = 0, frames_presented_ = 0, backend_id_ = (uint64_t)(uintptr_t)this;
-  int shader_failures_ = 0, draws_this_frame_ = 0;
+  std::atomic<int> shader_failures_{0}; int draws_this_frame_ = 0;
+  bool async_compile_ = [] { const char* e = std::getenv("MELEE_METAL_SYNC_COMPILE"); return !(e && *e && *e != '0'); }();
+  dispatch_queue_t compile_queue_ = nullptr;
+  std::mutex async_mutex_;
+  std::unordered_map<uint64_t, id<MTLFunction>> async_vs_, async_ps_;
+  std::vector<std::pair<PsoKey, id<MTLRenderPipelineState>>> ready_;
+  unsigned async_done_ = 0; double async_ms_ = 0;
+  std::unordered_set<PsoKey, PsoKeyHash> pending_, known_;
   double compile_ms_ = 0, pso_ms_ = 0, compile_total_ms_ = 0; unsigned compiles_ = 0, psos_ = 0;
   const bool compile_log_all_ = [] { const char* e = std::getenv("MELEE_METAL_COMPILE_LOG"); return e && *e && *e != '0'; }();
   id<MTLRenderPipelineState> bound_pipeline_ = nil;
