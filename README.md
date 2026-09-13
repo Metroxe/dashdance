@@ -2,9 +2,9 @@
 
 # Melee Unlocked for Apple
 
-### Super Smash Bros. Melee. Slippi Online. Native on your Mac.
+### Super Smash Bros. Melee. Slippi Online. Native on Mac, iPad, iPhone and Vision Pro.
 
-No emulator. No Dolphin. The game itself, translated ahead of time into native Apple Silicon code and rendered with Metal — with Slippi's matchmaking, rollback netcode and replays built in.
+No emulator. No Dolphin. The game itself, translated ahead of time into native Apple Silicon code and rendered with Metal — with Slippi's matchmaking, rollback netcode and replays built in. The only Melee port with Slippi rollback on Apple platforms.
 
 <img src="docs/images/match-onett.jpg" width="820" alt="Fox versus Luigi on Onett, running natively on macOS with the Slippi delay indicator in the corner">
 
@@ -13,8 +13,8 @@ No emulator. No Dolphin. The game itself, translated ahead of time into native A
 <br>
 
 ![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-000000?logo=apple&logoColor=white)
-![iOS](https://img.shields.io/badge/iOS-in%20progress-8E8E93?logo=apple&logoColor=white)
-![visionOS](https://img.shields.io/badge/visionOS-in%20progress-8E8E93?logo=apple&logoColor=white)
+![iOS](https://img.shields.io/badge/iPadOS%20%2F%20iOS-simulator%20verified-34C759?logo=apple&logoColor=white)
+![visionOS](https://img.shields.io/badge/visionOS-builds-F5A623?logo=apple&logoColor=white)
 ![Renderer](https://img.shields.io/badge/renderer-Metal-5E5CE6)
 ![Slippi](https://img.shields.io/badge/Slippi-Online%20compatible-34C759)
 ![License](https://img.shields.io/badge/license-GPL--2.0--or--later-lightgrey)
@@ -38,11 +38,19 @@ Melee has always been an emulated game on the Mac: a PowerPC console, simulated 
 
 ## Get playing
 
-You need an Apple Silicon Mac, your own **Super Smash Bros. Melee NTSC 1.02** disc image (`.iso` or `.gcm`), and, for online play, the [Slippi Launcher](https://slippi.gg/downloads) signed in once.
+You need an Apple Silicon Mac (or an iPad, iPhone or Vision Pro), your own **Super Smash Bros. Melee NTSC 1.02** disc image (`.iso` or `.gcm`), and a free [Slippi account](https://slippi.gg) for online play.
 
 1. **Build the app** (about ten minutes the first time — see [Build from source](#build-from-source)).
-2. **Open Melee Unlocked.** Pick your disc image when asked. The app remembers it.
-3. **Play.** Online Play uses the account you signed into in the Slippi Launcher automatically.
+2. **Open Melee Unlocked.** Choose your disc image (on iPad and iPhone, import it or drop it into the app's folder in Files). The app remembers it.
+3. **Sign in to Slippi** right in the launcher — email and password, no separate app. On a Mac that already has the Slippi Launcher signed in, that login is picked up automatically.
+4. **Play.**
+
+<div align="center">
+<img src="docs/images/mac-launcher.jpg" width="420" alt="The macOS launcher: disc, Slippi account, widescreen and sharpening, Play">
+&nbsp;&nbsp;
+<img src="docs/images/ipad-launcher.jpg" width="300" alt="The same launcher on iPad">
+<br><sub>The launcher on macOS and iPad: disc, Slippi account, a few settings, Play.</sub>
+</div>
 
 ### Controls
 
@@ -57,6 +65,17 @@ You need an Apple Silicon Mac, your own **Super Smash Bros. Melee NTSC 1.02** di
 
 Any controller SDL recognises works out of the box. A WUP-028 GameCube adapter takes priority on the ports it has controllers plugged into.
 
+### On iPad, iPhone and Vision Pro
+
+Touch controls appear automatically and fade away the moment a Bluetooth controller connects. They follow the on-screen controller design from [VirtualFriend](https://github.com/agg23/virtualfriend): a GameCube layout with an analog stick, the A/B/X/Y cluster, Z, a C-stick and triggers, with haptic feedback on every press and presses that slide between buttons. Hold the device upright and the game sits on top with the controls below; turn it sideways and they move to the sides.
+
+<div align="center">
+<img src="docs/images/ipad-touch-controls.jpg" width="360" alt="iPad in portrait: the game on top, the touch controller below">
+<br><sub>iPad Pro in the Simulator, native resolution, controls below the game.</sub>
+</div>
+
+The game simulates at 60 Hz (Slippi's rollback depends on it), and every finished frame is shown on the very next refresh of a 120 Hz ProMotion display rather than waiting for a 60 Hz slot, so input reaches the screen up to 8 ms sooner.
+
 ## Where it stands
 
 | | Status |
@@ -65,9 +84,10 @@ Any controller SDL recognises works out of the box. A WUP-028 GameCube adapter t
 | Slippi Online: login, matchmaking, rollback, replays | ✅ Working — verified with two local instances staying in sync for a full game |
 | Audio, keyboard, gamepads, GameCube adapter | ✅ Working |
 | Memory card saves (`.gci` folder) | ✅ Working |
-| Rendering | ✅ Native Metal renderer with the same Dolphin-derived shader pipeline as the Windows build, at up to 8× internal resolution |
-| iPhone / iPad | 🚧 In progress |
-| Apple Vision Pro | 🚧 In progress |
+| Rendering | ✅ Native Metal renderer with the same Dolphin-derived shader pipeline as the Windows build, integer internal resolution up to 16× plus supersampling, 120 Hz-ready presentation |
+| Native Slippi sign-in (no Slippi Launcher needed) | ✅ Working — Firebase email/password, play key from Slippi's backend |
+| iPad / iPhone | ✅ Boots and renders at native resolution in the Simulator with touch controls, launcher and disc import; not yet run on a physical device |
+| Apple Vision Pro | 🟡 Builds for the visionOS Simulator; no visionOS runtime is installed here yet, so untested |
 
 This is an alpha. Expect rough edges, and please report them.
 
@@ -101,6 +121,25 @@ cmake --build build/mac --target melee_port_mac --parallel
 tools/package_macos_app.sh build/mac dist
 open "dist/Melee Unlocked.app"
 ```
+
+### iPad, iPhone and Vision Pro
+
+The same tree builds the device apps with a full Xcode install. For the iPad Simulator:
+
+```bash
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+python3 tools/bootstrap_port.py --decomp-root /path/to/doldecomp-melee \
+  --dol /path/to/main.dol --build-dir build/ios-sim --gct-base 0x8065CC80 --macos-arch arm64 --stage generate
+cmake -S . -B build/ios-sim -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+  -DMELEE_DECOMP_ROOT=/path/to/doldecomp-melee -DMELEE_DOL_PATH=/path/to/main.dol \
+  -DMELEE_PORT_GENERATED_DIR=$PWD/build/ios-sim/generated/guest \
+  -DMELEE_BUILD_PORT_TESTS=OFF -DMELEE_BUILD_PORT_HEADLESS=OFF -DMELEE_BUILD_PORT_METAL=ON
+cmake --build build/ios-sim --target melee_port_mac --parallel
+xcrun simctl install booted build/ios-sim/port/MeleeUnlocked.app
+```
+
+Use `-DCMAKE_OSX_SYSROOT=iphoneos` for a device (sign the bundle with your team) and `-DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xrsimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=1.0` for the Vision Pro Simulator.
 
 `melee_port_mac --help` lists every option (window size, volume, input delay, explicit disc or Slippi folder). `melee_port_metal` and `melee_port_headless` are offline diagnostic executables used by the test suite. Developer notes live in [docs/](docs/).
 
