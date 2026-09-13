@@ -13,7 +13,7 @@ using json = nlohmann::json;
 constexpr const char* kFirebaseKey = "AIzaSyAuQqc_wgqcUu3FqrICEPZ9Av_hPxMR_i4";
 constexpr const char* kIdentityToolkit = "https://identitytoolkit.googleapis.com/v1/accounts:";
 constexpr const char* kGraphQL = "https://internal.slippi.gg/graphql";
-constexpr const char* kUserAgent = "MeleeUnlocked";
+constexpr const char* kUserAgent = "iSlippi";
 constexpr const char* kUserQuery =
     "query getUserKeyQuery($fbUid: String) { getUser(fbUid: $fbUid) { fbUid displayName connectCode { code } private { playKey } } "
     "getLatestDolphin { version } }";
@@ -82,7 +82,7 @@ bool send_password_reset(const std::string& email, std::string& error) {
   json reply;
   const std::string url = std::string(kIdentityToolkit) + "sendOobCode?key=" + kFirebaseKey;
   if (!post_json(url, "Content-Type: application/json", {{"requestType", "PASSWORD_RESET"}, {"email", email}}, reply, error)) {
-    if (error.rfind("No connection", 0) != 0) error = firebase_message(error);
+    if (error.rfind("No connection", 0) != 0 && error.rfind("Server error", 0) != 0) error = firebase_message(error);
     return false;
   }
   return true;
@@ -106,6 +106,8 @@ bool write_user_file(const std::string& dir, const Account& a, std::string& erro
   std::ofstream f(dir + "/user.json", std::ios::trunc);
   if (!f) { error = "Cannot write " + dir + "/user.json"; return false; }
   f << j.dump(2) << "\n";
+  f.close();
+  if (!f) { error = "Cannot write " + dir + "/user.json"; return false; }
   return true;
 }
 

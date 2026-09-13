@@ -42,6 +42,7 @@ PadState g_ui_pad{};
 bool g_ui_gamecube = false;
 int g_client_w = 0, g_client_h = 0;
 std::vector<SDL_Gamepad*> g_gamepads;
+int g_gamepad_port[4] = {-1, -1, -1, -1};   // GameCube port -> index into g_gamepads (set by input_poll)
 InputScript g_script;
 bool g_scripted = false;
 std::atomic<uint32_t> g_match_start{0};
@@ -53,9 +54,17 @@ std::atomic<uint32_t> g_match_start{0};
 // naturally between buttons. Adapted to a GameCube pad: analog stick on the left,
 // the A/B/X/Y cluster on the right, Z and the C-stick below it.
 enum Label : uint32_t { LB_NONE, LB_A, LB_B, LB_X, LB_Y, LB_Z, LB_L, LB_R, LB_START, LB_TAUNT, LB_C };   // kOverlayLabels order
+static_assert(LB_C + 1 == kOverlayLabelCount, "Label enum must match kOverlayLabels");
 struct Rect { float x0, y0, x1, y1; bool contains(float x, float y) const { return x >= x0 && x < x1 && y >= y0 && y < y1; } };
-struct TouchButton { uint16_t button; bool trigger_l, trigger_r; uint32_t label; Rect rect; bool capsule; bool pressed; };
-struct TouchStick { Rect rect; float radius; SDL_FingerID finger; bool active; float dx, dy; bool c; };
+struct TouchButton {
+  uint16_t button; bool trigger_l, trigger_r; uint32_t label; Rect rect; bool capsule; bool pressed;
+  bool hit(float x, float y) const {   // capsules by their box, round buttons by their inscribed circle
+    if (capsule) return rect.contains(x, y);
+    const float cx = (rect.x0 + rect.x1) * 0.5f, cy = (rect.y0 + rect.y1) * 0.5f, r = (rect.x1 - rect.x0) * 0.5f;
+    return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r;
+  }
+};
+struct TouchStick { Rect rect; float radius; SDL_FingerID finger; bool owned, active; float dx, dy; bool c; };
 struct TouchLayout { std::vector<TouchButton> buttons; TouchStick stick{}, cstick{}; int w = 0, h = 0; float pt = 1.0f; };
 TouchLayout g_touch;
 struct Finger { SDL_FingerID id; float x, y; };
@@ -67,7 +76,7 @@ std::mutex g_touch_mutex;   // events arrive on the main thread; input_poll and 
 Rect circle(float cx, float cy, float r) { return {cx - r, cy - r, cx + r, cy + r}; }
 void touch_layout() {
   TouchLayout& t = g_touch;
-  if (t.w == g_client_w && t.h == g_client_h && !t.buttons.empty()) return;
+  if (t.w == g_client_w && t.h == g_client_h && t.pt == g_pixels_per_point && !t.buttons.empty()) return;
   t.w = g_client_w; t.h = g_client_h; t.pt = g_pixels_per_point;
   std::vector<bool> pressed;
   for (const TouchButton& b : t.buttons) pressed.push_back(b.pressed);
@@ -116,6 +125,7 @@ bool touch_controls_visible() { return (g_touch_seen || g_touch_forced) && !phys
 
 void stick_update(TouchStick& st) {
   st.active = false;
+  if (!st.owned) return;
   for (const Finger& f : g_fingers) {
     if (f.id != st.finger) continue;
     const float cx = (st.rect.x0 + st.rect.x1) * 0.5f, cy = (st.rect.y0 + st.rect.y1) * 0.5f;
@@ -130,7 +140,7 @@ void touch_reevaluate() {
   touch_layout();
   for (TouchButton& b : g_touch.buttons) {
     bool pressed = false;
-    for (const Finger& f : g_fingers) if (b.rect.contains(f.x, f.y)) pressed = true;
+    for (const Finger& f : g_fingers) if (b.hit(f.x, f.y)) pressed = true;
     if (pressed && !b.pressed) haptic_tap(b.button == GC_A);
     b.pressed = pressed;
   }
@@ -146,11 +156,12 @@ void touch_event(const SDL_TouchFingerEvent& e) {
     g_fingers.push_back({e.fingerID, px, py});
     // A finger that lands on a stick owns it until it lifts, even when it wanders off.
     for (TouchStick* st : {&g_touch.stick, &g_touch.cstick})
-      if (!st->active && st->rect.contains(px, py)) { st->finger = e.fingerID; haptic_tap(false); }
+      if (!st->owned && st->rect.contains(px, py)) { st->finger = e.fingerID; st->owned = true; haptic_tap(false); break; }
   } else if (e.type == SDL_EVENT_FINGER_MOTION) {
     for (Finger& f : g_fingers) if (f.id == e.fingerID) { f.x = px; f.y = py; }
   } else {
     for (auto it = g_fingers.begin(); it != g_fingers.end();) { if (it->id == e.fingerID) it = g_fingers.erase(it); else ++it; }
+    for (TouchStick* st : {&g_touch.stick, &g_touch.cstick}) if (st->owned && st->finger == e.fingerID) st->owned = false;
   }
   touch_reevaluate();
 }
@@ -158,6 +169,12 @@ void touch_event(const SDL_TouchFingerEvent& e) {
 void read_touch(PadState& p) {
   std::lock_guard<std::mutex> lock(g_touch_mutex);
   if (!g_touch_seen) return;
+  if (!touch_controls_visible()) {   // a gamepad took over: drop any latched touch state
+    g_fingers.clear();
+    g_touch.stick.owned = g_touch.stick.active = g_touch.cstick.owned = g_touch.cstick.active = false;
+    for (TouchButton& b : g_touch.buttons) b.pressed = false;
+    return;
+  }
   p.err = 0;
   if (g_touch.stick.active) {
     p.stick_x = (int8_t)std::clamp((int)std::lround(g_touch.stick.dx * 127.0f), -127, 127);
@@ -202,8 +219,8 @@ bool touch_overlay(OverlayFrame& out) {
   }
   return true;
 }
-void touch_set_opacity(float opacity) { g_touch_opacity = std::clamp(opacity, 0.0f, 1.0f); }
-void touch_force_visible(bool visible) { g_touch_forced = visible; }
+void touch_set_opacity(float opacity) { std::lock_guard<std::mutex> lock(g_touch_mutex); g_touch_opacity = std::clamp(opacity, 0.0f, 1.0f); }
+void touch_force_visible(bool visible) { std::lock_guard<std::mutex> lock(g_touch_mutex); g_touch_forced = visible; }
 
 namespace {
 std::string narrow(const wchar_t* text) {
@@ -222,9 +239,10 @@ void refresh_client_size() {
   if (!g_window) return;
   int w = 0, h = 0;
   SDL_GetWindowSizeInPixels(g_window, &w, &h);
-  g_client_w = std::max(w, 1); g_client_h = std::max(h, 1);
   int pw = 0, ph = 0;
   SDL_GetWindowSize(g_window, &pw, &ph);
+  std::lock_guard<std::mutex> lock(g_touch_mutex);   // the touch layout reads these from other threads
+  g_client_w = std::max(w, 1); g_client_h = std::max(h, 1);
   g_pixels_per_point = pw > 0 ? (float)g_client_w / (float)pw : 1.0f;
 }
 
@@ -389,6 +407,13 @@ void window_pump() {
 }
 
 void window_set_fullscreen(bool enabled) { if (g_window) SDL_SetWindowFullscreen(g_window, enabled); }
+// Rumble for a GameCube port served by an SDL gamepad (DualSense, Xbox, MFi, Switch Pro...).
+void window_gamepad_rumble(int port, bool on) {
+  if (port < 0 || port >= 4) return;
+  const int index = g_gamepad_port[port];
+  if (index < 0 || index >= (int)g_gamepads.size()) return;
+  SDL_RumbleGamepad(g_gamepads[(size_t)index], on ? 0xC000 : 0, on ? 0xC000 : 0, on ? 250 : 0);
+}
 bool window_take_fullscreen_toggle() { return g_fullscreen_toggle.exchange(false); }
 double window_refresh_rate() {
   if (!g_window) return 60.0;
@@ -439,10 +464,12 @@ void input_poll(PadState out[4]) {
   ui.gamecube = (adapter_mask & 1u) != 0;
   // Gamepads fill ports in connection order after the adapter's; the keyboard adds to port 1.
   int port = 0;
-  for (SDL_Gamepad* pad : g_gamepads) {
+  for (int i = 0; i < 4; ++i) g_gamepad_port[i] = -1;
+  for (size_t index = 0; index < g_gamepads.size(); ++index) {
     while (port < 4 && (adapter_mask & (1u << port))) ++port;
     if (port >= 4) break;
-    read_gamepad(pad, out[port]);
+    read_gamepad(g_gamepads[index], out[port]);
+    g_gamepad_port[port] = (int)index;
     ++port;
   }
   if (!(adapter_mask & 1u)) { out[0].err = 0; read_keyboard(out[0]); read_touch(out[0]); }

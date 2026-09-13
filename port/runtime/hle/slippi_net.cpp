@@ -24,6 +24,21 @@
 
 using json = nlohmann::json;
 
+#ifdef __APPLE__
+#include <sys/socket.h>
+#endif
+namespace {
+// Apple Wi-Fi and cellular stacks map the socket's service type to a traffic class; voice
+// (NET_SERVICE_TYPE_VO) gets the lowest-latency queue, which is what rollback input packets want.
+void prioritize_socket(ENetSocket socket) {
+#ifdef __APPLE__
+  int service = NET_SERVICE_TYPE_VO;
+  setsockopt(socket, SOL_SOCKET, SO_NET_SERVICE_TYPE, &service, sizeof service);
+#else
+  (void)socket;
+#endif
+}
+}  // namespace
 namespace slippi {
 
 const char* const SLIPPI_SEMVER = "3.6.4";
@@ -175,6 +190,7 @@ NetplayClient::NetplayClient(std::vector<std::string> addrs, std::vector<uint16_
   }
   client_ = enet_host_create(local, 10, 3, 0, 0);
   if (!client_) { host::log("slippi: cannot create ENet client"); status_.store(ConnectStatus::FAILED); return; }
+  prioritize_socket(client_->socket);
   for (int i = 0; i < remote_player_count; ++i) {
     ENetAddress addr{};
     in_addr peer_ip{};
@@ -822,6 +838,7 @@ void Matchmaking::startMatchmaking() {
     client_ = enet_host_create(&addr, 1, 3, 0, 0);
   }
   if (!client_) { state_ = ERROR_ENCOUNTERED; error_msg_ = "Failed to create mm client"; return; }
+  prioritize_socket(client_->socket);
   ENetAddress addr;
   enet_address_set_host(&addr, "mm.slippi.gg");
   addr.port = 43113;

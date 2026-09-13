@@ -10,6 +10,7 @@
 #include "host.h"
 #include <CoreText/CoreText.h>
 #include <dispatch/dispatch.h>
+#include <pthread/qos.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -610,7 +611,8 @@ class MetalBackend final : public Backend {
 
   void present_efb(const EfbCopy& c) {
     end_pass();
-    id<CAMetalDrawable> drawable = [layer_ nextDrawable];
+    // A second XFB copy in the same frame re-renders into the drawable already acquired.
+    id<CAMetalDrawable> drawable = drawable_ ?: [layer_ nextDrawable];
     if (!drawable) return;
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = drawable.texture;
@@ -650,6 +652,7 @@ class MetalBackend final : public Backend {
     std::vector<uint8_t> pixels((size_t)W * H, 0);
     CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
     CGContextRef ctx = CGBitmapContextCreate(pixels.data(), W, H, 8, W, gray, kCGImageAlphaNone);
+    if (!ctx) { CGColorSpaceRelease(gray); host::log("metal: no CoreGraphics context for the overlay label atlas"); return; }
     CGFloat white[] = {1.0, 1.0};
     CGColorRef fg = CGColorCreate(gray, white);
     CGColorSpaceRelease(gray);
@@ -665,7 +668,7 @@ class MetalBackend final : public Backend {
       CTLineRef line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)text);
       CGRect bounds = CTLineGetBoundsWithOptions(line, kCTLineBoundsUseGlyphPathBounds);
       const int w = (int)std::ceil(bounds.size.width) + 4, h = (int)std::ceil(bounds.size.height) + 4;
-      if (x + w > W || h > H) { CFRelease(line); break; }
+      if (x + w > W || h > H) { CFRelease(line); host::log("metal: overlay label '%s' does not fit the atlas", host::kOverlayLabels[i]); continue; }
       // Glyph box 2px below the top edge, 2px right of `x` (top-down space, flipped text matrix).
       CGContextSetTextPosition(ctx, x + 2 - bounds.origin.x, 2 + bounds.origin.y + bounds.size.height);
       CTLineDraw(line, ctx);
@@ -688,6 +691,8 @@ class MetalBackend final : public Backend {
   void draw_overlay(id<MTLRenderCommandEncoder> enc, float ww, float wh) {
     if (!overlay_ || !overlay_(overlay_frame_) || overlay_frame_.shapes.empty()) return;
     static_assert(sizeof(OvShape) == 64, "overlay shape layout must match the shader");
+    static_assert(sizeof(OvConstants) == 272, "overlay constants layout must match the shader");
+    static_assert(host::kOverlayLabelCount <= 16, "the shader holds 16 label rects");
     std::vector<OvShape> shapes;
     shapes.reserve(overlay_frame_.shapes.size());
     for (const host::OverlayShape& s : overlay_frame_.shapes)
@@ -730,6 +735,8 @@ class MetalBackend final : public Backend {
   }
 
   void submit(const Frame& frame, const DrawMatrices* overrides) {
+    static thread_local bool qos_set = false;
+    if (!qos_set) { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0); qos_set = true; }   // render thread on performance cores
     @autoreleasepool {
       if (opts_.efb_scale == 0 && pick_scale() != scale_) { wait_idle(); efb_copies_.clear(); create_efb(); }
       dispatch_semaphore_wait(frame_semaphore_, DISPATCH_TIME_FOREVER);

@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <mach-o/dyld.h>
+#include <pthread/qos.h>
 #include <TargetConditionals.h>
 #if TARGET_OS_IPHONE
 #include <SDL3/SDL_main.h>
@@ -62,7 +63,7 @@ void usage() {
       "  --netplay-port N         fixed local UDP port for netplay\n"
       "  --local-peer i:port:ip:port  peer two local instances directly (testing)\n"
       "  --sys-dir DIR            Slippi Sys folder (code tables, GameFiles)\n"
-      "  --replay-dir DIR         .slp output (default ~/Library/Application Support/MeleeUnlocked/Replays)\n"
+      "  --replay-dir DIR         .slp output (default ~/Library/Application Support/iSlippi/Replays)\n"
       "  --card-dir DIR           memory card A folder of .gci files\n"
       "  --profile-dir DIR        app profile root (settings, Aurora preferences)\n"
       "  --cache-dir DIR          pipeline cache and ISO hash cache\n"
@@ -126,6 +127,7 @@ bool ensure_dir(const std::string& path, const char* what) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);   // the game simulation runs on this thread: keep it on performance cores
   host::Options& o = host::options;
   auto& online = slippi::online::config();
   bool allow_interpreter = true;
@@ -134,6 +136,7 @@ int main(int argc, char** argv) {
   gx::MetalOptions gfx;
   std::string script, iso_arg, user_dir, sys_dir, replay_dir, card_dir, profile_dir, cache_dir, log_file;
   bool offline = false, choose_disc = false;
+  float overlay_opacity_arg = -1.0f;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     auto next = [&]() -> const char* { if (i + 1 >= argc) { usage(); std::exit(2); } return argv[++i]; };
@@ -148,7 +151,7 @@ int main(int argc, char** argv) {
     else if (a == "--widescreen") gfx.widescreen = true;
     else if (a == "--sharpness") gfx.sharpness = std::clamp((float)std::atof(next()), 0.0f, 1.0f);
     else if (a == "--touch-overlay") host::touch_force_visible(true);
-    else if (a == "--overlay-opacity") host::touch_set_opacity((float)std::atof(next()));
+    else if (a == "--overlay-opacity") { overlay_opacity_arg = std::clamp((float)std::atof(next()), 0.0f, 1.0f); }
     else if (a == "--anisotropy") gfx.anisotropy = std::clamp(std::atoi(next()), 1, 16);
     else if (a == "--capture") gfx.capture_path = next();
     else if (a == "--capture-frame") gfx.capture_frame = (uint32_t)std::strtoul(next(), nullptr, 0);
@@ -186,7 +189,12 @@ int main(int argc, char** argv) {
   }
   if (iso_arg.empty()) { if (const char* env = std::getenv("MELEE_ISO")) iso_arg = env; }
 
-  const fs::path support = fs::path(home_dir()) / "Library/Application Support/MeleeUnlocked";
+  const fs::path support = fs::path(home_dir()) / "Library/Application Support/iSlippi";
+  for (const char* old_name : {"Shine", "MeleeUnlocked"}) {   // carry settings, saves and replays over from earlier names
+    std::error_code ec;
+    const fs::path previous = fs::path(home_dir()) / "Library/Application Support" / old_name;
+    if (fs::is_directory(previous, ec) && !fs::exists(support, ec)) fs::rename(previous, support, ec);
+  }
   // Remembered launcher settings; command-line flags override them.
   const fs::path remembered = support / "launcher.ini";
   host::LauncherSettings settings;
@@ -194,6 +202,7 @@ int main(int argc, char** argv) {
     std::ifstream in(remembered);
     std::string line;
     while (std::getline(in, line)) {
+      while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
       auto value = [&](const char* key) -> const char* { size_t n = std::strlen(key); return line.compare(0, n, key) == 0 ? line.c_str() + n : nullptr; };
       if (const char* v = value("iso=")) settings.iso = v;
       else if (const char* v = value("widescreen=")) settings.widescreen = *v == '1';
@@ -224,19 +233,23 @@ int main(int argc, char** argv) {
     }
 #endif
     if (!settings.iso.empty() && !fs::is_regular_file(settings.iso, ec)) { previous_error = "The last disc image is no longer at " + settings.iso; settings.iso.clear(); }
-    if (!iso_arg.empty()) settings.iso = iso_arg;
+    if (!iso_arg.empty()) {
+      if (fs::is_regular_file(iso_arg, ec)) settings.iso = iso_arg;
+      else previous_error = "There is no disc image at " + iso_arg;
+    }
     settings.widescreen = settings.widescreen || gfx.widescreen;
     if (!host::launcher_run(settings, previous_error) || settings.iso.empty()) return 0;
     iso_arg = settings.iso;
     gfx.widescreen = settings.widescreen;
     gfx.sharpness = settings.sharpness;
-    host::touch_set_opacity(settings.overlay_opacity);
     if (!settings.online) offline = true;
-    ensure_dir(support.string(), "support");
-    std::ofstream out(remembered, std::ios::trunc);
-    out << "iso=" << settings.iso << "\nwidescreen=" << (settings.widescreen ? 1 : 0) << "\nonline=" << (settings.online ? 1 : 0)
-        << "\nsharpness=" << settings.sharpness << "\noverlay=" << settings.overlay_opacity << "\n";
+    if (ensure_dir(support.string(), "support")) {
+      std::ofstream out(remembered, std::ios::trunc);
+      out << "iso=" << settings.iso << "\nwidescreen=" << (settings.widescreen ? 1 : 0) << "\nonline=" << (settings.online ? 1 : 0)
+          << "\nsharpness=" << settings.sharpness << "\noverlay=" << settings.overlay_opacity << "\n";
+    }
   }
+  host::touch_set_opacity(overlay_opacity_arg >= 0.0f ? overlay_opacity_arg : settings.overlay_opacity);   // the flag wins over the remembered value
   if (profile_dir.empty()) profile_dir = (support / "User").string();
   if (card_dir.empty()) card_dir = (fs::path(profile_dir) / "GC/CardA").string();
   if (replay_dir.empty()) replay_dir = (support / "Replays").string();
@@ -271,14 +284,14 @@ int main(int argc, char** argv) {
   if (!script.empty() && !host::input_load_script(script.c_str())) { std::fprintf(stderr, "cannot load input script %s\n", script.c_str()); return 2; }
   ppc::set_interpreter_allowed(allow_interpreter);
 
-  host::log("Melee Unlocked %s: macOS Metal/Aurora frontend", MELEE_PORT_VERSION);
+  host::log("iSlippi %s: Apple Metal frontend", MELEE_PORT_VERSION);
   host::log("paths: iso=%s sys=%s profile=%s replays=%s cache=%s", o.iso.c_str(), o.sys_dir.c_str(), profile_dir.c_str(), replay_dir.c_str(), cache_dir.c_str());
   host::log("slippi: %s%s", offline ? "offline" : "online services enabled, user dir ", offline ? "" : online.user_dir.c_str());
   host::log("execution: %s, fp_profile=%s", allow_interpreter ? "interpreter fallback allowed" : "strict AOT", ppc::fp_profile_name(ppc::fp_profile()));
   if (!host::disc_open(o.iso)) {
     host::log("cannot open disc image %s", o.iso.c_str());
     std::fprintf(stderr, "cannot open ISO %s\n", o.iso.c_str());
-    host::mac_show_error("Could not load this disc image", "Melee Unlocked needs an unmodified Super Smash Bros. Melee NTSC 1.02 image.\n\n" + o.iso);
+    host::mac_show_error("Could not load this disc image", "iSlippi needs an unmodified Super Smash Bros. Melee NTSC 1.02 image.\n\n" + o.iso);
     return 1;
   }
 
@@ -287,7 +300,7 @@ int main(int argc, char** argv) {
   bool audio_opened = false;
   int code = 0;
   try {
-    void* layer = host::window_create((int)window_w, (int)window_h, L"Melee Unlocked", true);
+    void* layer = host::window_create((int)window_w, (int)window_h, L"iSlippi", true);
     int client_w = 0, client_h = 0;
     host::window_client_size(&client_w, &client_h);
     backend = gx::create_metal_backend(layer, client_w, client_h, gfx);

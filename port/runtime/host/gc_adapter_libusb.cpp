@@ -3,6 +3,7 @@
 // stream on endpoint 0x81 (status + 9 bytes per port), 0x11 + 4 bytes sets rumble.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "host.h"
+#include "window.h"
 
 #include <libusb.h>
 
@@ -153,6 +154,7 @@ uint32_t gcadapter_poll(PadState out[4]) {
 
 void gcadapter_rumble(int port, bool on) {
   if (port < 0 || port > 3) return;
+  window_gamepad_rumble(port, on);   // ports fed by SDL gamepads (never adapter ports) rumble through SDL
   uint8_t v = on ? 1 : 0;
   if (g_rumble[port] != v) { g_rumble[port] = v; g_rumble_dirty = true; }
 }

@@ -31,7 +31,7 @@ void prepare_application() {
 @property(nonatomic) NSButton* signOutButton;
 @property(nonatomic) NSButton* resetButton;
 @property(nonatomic) NSStackView* signInRows;
-@property(nonatomic) BOOL busy;
+@property(nonatomic) BOOL busy, closed;
 @end
 
 @implementation MULauncherWindow
@@ -43,7 +43,7 @@ void prepare_application() {
   self.window = [[NSWindow alloc] initWithContentRect:frame
                                             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskFullSizeContentView
                                               backing:NSBackingStoreBuffered defer:NO];
-  self.window.title = @"Melee Unlocked";
+  self.window.title = @"iSlippi";
   self.window.titlebarAppearsTransparent = YES;
   self.window.titleVisibility = NSWindowTitleHidden;
   self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
@@ -61,10 +61,10 @@ void prepare_application() {
     [stack.leadingAnchor constraintEqualToAnchor:self.window.contentView.leadingAnchor constant:36],
     [stack.trailingAnchor constraintEqualToAnchor:self.window.contentView.trailingAnchor constant:-36]]];
 
-  NSTextField* title = [NSTextField labelWithString:@"Melee Unlocked"];
+  NSTextField* title = [NSTextField labelWithString:@"iSlippi"];
   title.font = [NSFont systemFontOfSize:34 weight:NSFontWeightBold];
   title.textColor = NSColor.whiteColor;
-  NSTextField* subtitle = [NSTextField wrappingLabelWithString:@"Super Smash Bros. Melee with Slippi rollback netplay, native on Apple silicon."];
+  NSTextField* subtitle = [NSTextField wrappingLabelWithString:@"Super Smash Bros. Melee with Slippi rollback netplay, native on your Mac. Unofficial; not affiliated with the Slippi team."];
   subtitle.font = [NSFont systemFontOfSize:14];
   subtitle.textColor = [NSColor colorWithWhite:1 alpha:0.7];
   [stack addArrangedSubview:title];
@@ -192,6 +192,7 @@ void prepare_application() {
   return l;
 }
 - (void)refreshAccount {
+  if (!self.settings) return;
   slippi::login::Account account;
   const bool own = slippi::login::read_user_file(self.settings->slippi_dir, account);
   const bool launcher = !own && self.settings->account_from_launcher && !self.settings->account_code.empty();
@@ -215,13 +216,16 @@ void prepare_application() {
   self.busy = YES; self.signInButton.enabled = NO;
   self.accountLabel.stringValue = @"Signing in…";
   std::string dir = self.settings->slippi_dir;
+  __weak MULauncherWindow* weakSelf = self;
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
     slippi::login::Account account; std::string error;
     bool ok = slippi::login::sign_in(email, password, account, error) && slippi::login::write_user_file(dir, account, error);
     dispatch_async(dispatch_get_main_queue(), ^{
-      self.busy = NO; self.signInButton.enabled = YES;
-      if (ok) { self.passwordField.stringValue = @""; [self refreshAccount]; }
-      else self.accountLabel.stringValue = [NSString stringWithUTF8String:error.c_str()];
+      MULauncherWindow* strongSelf = weakSelf;
+      if (!strongSelf || strongSelf.closed) return;
+      strongSelf.busy = NO; strongSelf.signInButton.enabled = YES;
+      if (ok) { strongSelf.passwordField.stringValue = @""; [strongSelf refreshAccount]; }
+      else strongSelf.accountLabel.stringValue = [NSString stringWithUTF8String:error.c_str()];
     });
   });
 }
@@ -229,15 +233,19 @@ void prepare_application() {
   std::string email = self.emailField.stringValue.UTF8String;
   if (email.empty()) { [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://slippi.gg"]]; return; }
   self.accountLabel.stringValue = @"Sending a password reset email…";
+  __weak MULauncherWindow* weakSelf = self;
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
     std::string error;
     bool ok = slippi::login::send_password_reset(email, error);
     dispatch_async(dispatch_get_main_queue(), ^{
-      self.accountLabel.stringValue = ok ? @"Password reset email sent. Check your inbox." : [NSString stringWithUTF8String:error.c_str()];
+      MULauncherWindow* strongSelf = weakSelf;
+      if (!strongSelf || strongSelf.closed) return;
+      strongSelf.accountLabel.stringValue = ok ? @"Password reset email sent. Check your inbox." : [NSString stringWithUTF8String:error.c_str()];
     });
   });
 }
 - (void)signOut {
+  if (!self.settings) return;
   slippi::login::remove_user_file(self.settings->slippi_dir);
   [self refreshAccount];
 }
@@ -291,6 +299,8 @@ bool launcher_run(LauncherSettings& settings, const std::string& error) {
                                                                        error:error.empty() ? nil : [NSString stringWithUTF8String:error.c_str()]];
     [launcher.window makeKeyAndOrderFront:nil];
     NSModalResponse response = [NSApp runModalForWindow:launcher.window];
+    launcher.closed = YES;
+    launcher.settings = nullptr;   // an in-flight sign-in must not write into main's settings afterwards
     [launcher.window orderOut:nil];
     return response == NSModalResponseOK;
   }

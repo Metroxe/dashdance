@@ -14,6 +14,7 @@ void* window_create(int w, int h, const wchar_t* title, bool visible = true);
 void window_set_resize_callback(ResizeCallback cb);
 void window_pump();
 void window_set_fullscreen(bool enabled);
+void window_gamepad_rumble(int port, bool on);   // SDL gamepad on that GameCube port, if any
 bool window_take_fullscreen_toggle();   // true once per Alt+Enter press in the game window
 double window_refresh_rate();
 void window_destroy();

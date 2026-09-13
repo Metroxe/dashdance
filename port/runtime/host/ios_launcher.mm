@@ -27,7 +27,7 @@ std::vector<std::string> documents_discs(NSURL** documents_out) {
 
 @interface MULauncherController : UIViewController <UIDocumentPickerDelegate>
 @property(nonatomic) host::LauncherSettings* settings;
-@property(nonatomic) BOOL done, play;
+@property(nonatomic) BOOL done, playPressed;
 @property(nonatomic) UILabel* discLabel;
 @property(nonatomic) UILabel* hintLabel;
 @property(nonatomic) UIButton* playButton;
@@ -79,11 +79,11 @@ std::vector<std::string> documents_discs(NSURL** documents_out) {
   width.priority = UILayoutPriorityDefaultHigh; width.active = YES;
 
   UILabel* title = [[UILabel alloc] init];
-  title.text = @"Melee Unlocked";
+  title.text = @"iSlippi";
   title.font = [UIFont systemFontOfSize:44 weight:UIFontWeightBold];
   title.textColor = UIColor.whiteColor; title.textAlignment = NSTextAlignmentCenter;
   UILabel* subtitle = [[UILabel alloc] init];
-  subtitle.text = @"Super Smash Bros. Melee with Slippi rollback netplay, running natively on this device.";
+  subtitle.text = @"Super Smash Bros. Melee with Slippi rollback netplay, running natively on this device. Unofficial; not affiliated with the Slippi team.";
   subtitle.font = [UIFont systemFontOfSize:17 weight:UIFontWeightRegular];
   subtitle.textColor = [UIColor colorWithWhite:1 alpha:0.7]; subtitle.textAlignment = NSTextAlignmentCenter; subtitle.numberOfLines = 0;
   [stack addArrangedSubview:title]; [stack addArrangedSubview:subtitle];
@@ -144,7 +144,7 @@ std::vector<std::string> documents_discs(NSURL** documents_out) {
   [settingsStack addArrangedSubview:[self row:@"Slippi Online" control:self.onlineSwitch]];
   self.sharpnessSlider = [[UISlider alloc] init]; self.sharpnessSlider.value = self.settings->sharpness;
   [settingsStack addArrangedSubview:[self row:@"Sharpen" control:self.sharpnessSlider]];
-  self.overlaySlider = [[UISlider alloc] init]; self.overlaySlider.minimumValue = 0.2f; self.overlaySlider.value = self.settings->overlay_opacity;
+  self.overlaySlider = [[UISlider alloc] init];  self.overlaySlider.value = self.settings->overlay_opacity;
   [settingsStack addArrangedSubview:[self row:@"On-screen controls" control:self.overlaySlider]];
   [stack addArrangedSubview:settings];
 
@@ -215,6 +215,7 @@ std::vector<std::string> documents_discs(NSURL** documents_out) {
   return f;
 }
 - (void)refreshAccount {
+  if (!self.settings) return;
   slippi::login::Account account;
   const bool signed_in = slippi::login::read_user_file(self.settings->slippi_dir, account);
   if (signed_in) {
@@ -234,13 +235,16 @@ std::vector<std::string> documents_discs(NSURL** documents_out) {
   self.busy = YES; self.signInButton.enabled = NO;
   self.accountLabel.text = @"Signing in…";
   std::string dir = self.settings->slippi_dir;
+  __weak MULauncherController* weakSelf = self;
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
     slippi::login::Account account; std::string error;
     bool ok = slippi::login::sign_in(email, password, account, error) && slippi::login::write_user_file(dir, account, error);
     dispatch_async(dispatch_get_main_queue(), ^{
-      self.busy = NO; self.signInButton.enabled = YES;
-      if (ok) { self.passwordField.text = @""; [self refreshAccount]; }
-      else self.accountLabel.text = [NSString stringWithUTF8String:error.c_str()];
+      MULauncherController* strongSelf = weakSelf;
+      if (!strongSelf || strongSelf.done) return;
+      strongSelf.busy = NO; strongSelf.signInButton.enabled = YES;
+      if (ok) { strongSelf.passwordField.text = @""; [strongSelf refreshAccount]; }
+      else strongSelf.accountLabel.text = [NSString stringWithUTF8String:error.c_str()];
     });
   });
 }
@@ -251,15 +255,19 @@ std::vector<std::string> documents_discs(NSURL** documents_out) {
     return;
   }
   self.accountLabel.text = @"Sending a password reset email…";
+  __weak MULauncherController* weakSelf = self;
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
     std::string error;
     bool ok = slippi::login::send_password_reset(email, error);
     dispatch_async(dispatch_get_main_queue(), ^{
-      self.accountLabel.text = ok ? @"Password reset email sent. Check your inbox." : [NSString stringWithUTF8String:error.c_str()];
+      MULauncherController* strongSelf = weakSelf;
+      if (!strongSelf || strongSelf.done) return;
+      strongSelf.accountLabel.text = ok ? @"Password reset email sent. Check your inbox." : [NSString stringWithUTF8String:error.c_str()];
     });
   });
 }
 - (void)signOut {
+  if (!self.settings) return;
   slippi::login::remove_user_file(self.settings->slippi_dir);
   [self refreshAccount];
 }
@@ -312,7 +320,7 @@ std::vector<std::string> documents_discs(NSURL** documents_out) {
   self.settings->online = self.onlineSwitch.on;
   self.settings->sharpness = self.sharpnessSlider.value;
   self.settings->overlay_opacity = self.overlaySlider.value;
-  self.play = YES; self.done = YES;
+  self.playPressed = YES; self.done = YES;
 }
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
 @end
@@ -347,7 +355,8 @@ bool launcher_run(LauncherSettings& settings, const std::string& error) {
     window.hidden = YES;
     window.rootViewController = nil;
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
-    return controller.play;
+    controller.settings = nullptr;   // an in-flight sign-in must not write into main's settings afterwards
+    return controller.playPressed;
   }
 }
 }  // namespace host

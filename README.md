@@ -1,10 +1,12 @@
 <div align="center">
 
-# Melee Unlocked for Apple
+# iSlippi
 
 ### Super Smash Bros. Melee. Slippi Online. Native on Mac, iPad, iPhone and Vision Pro.
 
 No emulator. No Dolphin. The game itself, translated ahead of time into native Apple Silicon code and rendered with Metal — with Slippi's matchmaking, rollback netcode and replays built in. The only Melee port with Slippi rollback on Apple platforms.
+
+<sub>An unofficial, community client. Not affiliated with or endorsed by the Slippi team or Nintendo.</sub>
 
 <img src="docs/images/match-onett.jpg" width="820" alt="Fox versus Luigi on Onett, running natively on macOS with the Slippi delay indicator in the corner">
 
@@ -41,7 +43,7 @@ Melee has always been an emulated game on the Mac: a PowerPC console, simulated 
 You need an Apple Silicon Mac (or an iPad, iPhone or Vision Pro), your own **Super Smash Bros. Melee NTSC 1.02** disc image (`.iso` or `.gcm`), and a free [Slippi account](https://slippi.gg) for online play.
 
 1. **Build the app** (about ten minutes the first time — see [Build from source](#build-from-source)).
-2. **Open Melee Unlocked.** Choose your disc image (on iPad and iPhone, import it or drop it into the app's folder in Files). The app remembers it.
+2. **Open iSlippi.** Choose your disc image (on iPad and iPhone, import it or drop it into the app's folder in Files). The app remembers it.
 3. **Sign in to Slippi** right in the launcher — email and password, no separate app. On a Mac that already has the Slippi Launcher signed in, that login is picked up automatically.
 4. **Play.**
 
@@ -74,7 +76,18 @@ Touch controls appear automatically and fade away the moment a Bluetooth control
 <br><sub>iPad Pro in the Simulator, native resolution, controls below the game.</sub>
 </div>
 
-The game simulates at 60 Hz (Slippi's rollback depends on it), and every finished frame is shown on the very next refresh of a 120 Hz ProMotion display rather than waiting for a 60 Hz slot, so input reaches the screen up to 8 ms sooner.
+### Built for the hardware
+
+Slippi is competitive, so the app uses what Apple devices offer for latency:
+
+| | |
+|---|---|
+| **ProMotion / variable refresh** | The game simulates at 60 Hz (rollback depends on it); every finished frame is shown on the very next refresh of a 120 Hz display instead of waiting for a 60 Hz slot, up to 8 ms sooner. Double-buffered swapchain, iPhone 120 Hz opt-in. |
+| **Game Mode** | Declared as a game, so macOS and iOS give it CPU/GPU priority and cut Bluetooth controller latency in full screen. |
+| **Performance cores** | The simulation and render threads run at user-interactive QoS on Apple silicon. |
+| **Wi-Fi traffic class** | Netplay and matchmaking sockets use the voice service class, the lowest-latency Wi-Fi queue. |
+| **Controllers** | GameCube adapter (WUP-028) over USB, any Bluetooth or MFi pad with rumble, keyboard, and touch with haptics. |
+| **Metal** | Native renderer at integer multiples of the original resolution, supersampling, anisotropic filtering, contrast-adaptive sharpening. |
 
 ## Where it stands
 
@@ -108,8 +121,8 @@ This is an alpha. Expect rough edges, and please report them.
 Requirements: Xcode Command Line Tools, Homebrew (`cmake ninja python libusb`), a checkout of [doldecomp/melee](https://github.com/doldecomp/melee) for the animation helpers, and your disc's `main.dol`.
 
 ```bash
-git clone https://github.com/TheAndersMadsen/melee-slippi-native.git
-cd melee-slippi-native
+git clone https://github.com/TheAndersMadsen/islippi.git
+cd islippi
 tools/bootstrap_aurora.sh
 python3 tools/bootstrap_port.py --decomp-root /path/to/doldecomp-melee \
   --dol /path/to/main.dol --build-dir build/mac --gct-base 0x8065CC80 --macos-arch arm64 --stage generate
@@ -119,7 +132,7 @@ cmake -S . -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DMELEE_BUILD_PORT_TESTS=ON -DMELEE_BUILD_PORT_HEADLESS=ON -DMELEE_BUILD_PORT_METAL=ON
 cmake --build build/mac --target melee_port_mac --parallel
 tools/package_macos_app.sh build/mac dist
-open "dist/Melee Unlocked.app"
+open dist/iSlippi.app
 ```
 
 ### iPad, iPhone and Vision Pro
@@ -136,7 +149,7 @@ cmake -S . -B build/ios-sim -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_C
   -DMELEE_PORT_GENERATED_DIR=$PWD/build/ios-sim/generated/guest \
   -DMELEE_BUILD_PORT_TESTS=OFF -DMELEE_BUILD_PORT_HEADLESS=OFF -DMELEE_BUILD_PORT_METAL=ON
 cmake --build build/ios-sim --target melee_port_mac --parallel
-xcrun simctl install booted build/ios-sim/port/MeleeUnlocked.app
+xcrun simctl install booted build/ios-sim/port/iSlippi.app
 ```
 
 Use `-DCMAKE_OSX_SYSROOT=iphoneos` for a device (sign the bundle with your team) and `-DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xrsimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=1.0` for the Vision Pro Simulator.

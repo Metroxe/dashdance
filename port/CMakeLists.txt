@@ -490,10 +490,10 @@ endif()
   add_executable(melee_port_mac app/main_mac.cpp)
   if(MELEE_DEVICE_TARGET)
     set_target_properties(melee_port_mac PROPERTIES
-      MACOSX_BUNDLE TRUE OUTPUT_NAME "MeleeUnlocked"
+      MACOSX_BUNDLE TRUE OUTPUT_NAME "iSlippi"
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/app/ios/Info.plist.in"
-      MACOSX_BUNDLE_GUI_IDENTIFIER gg.meleeunlocked.ios
-      MACOSX_BUNDLE_BUNDLE_NAME "Melee Unlocked"
+      MACOSX_BUNDLE_GUI_IDENTIFIER app.islippi.ios
+      MACOSX_BUNDLE_BUNDLE_NAME "iSlippi"
       MACOSX_BUNDLE_BUNDLE_VERSION "${MELEE_PORT_VERSION}"
       MACOSX_BUNDLE_SHORT_VERSION_STRING "${MELEE_PORT_VERSION}"
       XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2,7")
