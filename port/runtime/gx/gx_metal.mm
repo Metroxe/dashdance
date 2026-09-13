@@ -13,6 +13,7 @@
 #include <pthread/qos.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <unordered_map>
@@ -287,7 +288,8 @@ class MetalBackend final : public Backend {
     rp.depthAttachment.storeAction = MTLStoreActionStore;
     efb_needs_clear_ = false;
     encoder_ = [command_ renderCommandEncoderWithDescriptor:rp];
-    [encoder_ setFrontFacingWinding:MTLWindingClockwise];
+    [encoder_ setFrontFacingWinding:winding_ccw_ ? MTLWindingCounterClockwise : MTLWindingClockwise];
+    if (z_clamp_) [encoder_ setDepthClipMode:MTLDepthClipModeClamp];
     [encoder_ setVertexBuffer:vertex_ring_[slot_].buffer offset:0 atIndex:0];
     bound_pipeline_ = nil; bound_depth_ = nil; bound_cull_ = -1;
   }
@@ -362,6 +364,10 @@ class MetalBackend final : public Backend {
 
   id<MTLFunction> compile(const std::string& source, const char* entry, const char* what, uint64_t hash) {
     NSError* error = nil;
+    if (const char* dir = std::getenv("MELEE_MSL_DUMP")) {   // developer aid: every compiled shader as a file
+      std::ofstream dump(std::string(dir) + "/" + what + "_" + std::to_string(hash) + ".metal");
+      dump << source;
+    }
     MTLCompileOptions* options = [MTLCompileOptions new];
     options.fastMathEnabled = NO;
     id<MTLLibrary> lib = [device_ newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()] options:options error:&error];
@@ -494,13 +500,22 @@ class MetalBackend final : public Backend {
     if (sr <= sl || sb <= st) return;
 
     uint8_t* vcpu; size_t voffset;
-    const size_t vbytes = (size_t)n * sizeof(Vertex);
-    if (!vertex_ring_[slot_].alloc(vbytes, 16, &vcpu, &voffset)) { if (!ring_full_logged_) { host::log("metal: vertex ring full"); ring_full_logged_ = true; } return; }
     const Vertex* vsrc = (override_matrices && override_matrices->vertices) ? override_matrices->vertices : &frame.vertices[dc.first_vertex];
-    std::memcpy(vcpu, vsrc, vbytes);
-    uint8_t* icpu; size_t ioffset;
-    if (!index_ring_[slot_].alloc(idx.size() * 4, 4, &icpu, &ioffset)) { if (!ring_full_logged_) { host::log("metal: index ring full"); ring_full_logged_ = true; } return; }
-    std::memcpy(icpu, idx.data(), idx.size() * 4);
+    size_t ioffset = 0;
+    if (no_index_) {
+      // Diagnostic non-indexed path: the vertex stream is expanded through the index list.
+      const size_t vbytes = idx.size() * sizeof(Vertex);
+      if (!vertex_ring_[slot_].alloc(vbytes, 256, &vcpu, &voffset)) { if (!ring_full_logged_) { host::log("metal: vertex ring full"); ring_full_logged_ = true; } return; }
+      Vertex* vdst = (Vertex*)vcpu;
+      for (size_t i = 0; i < idx.size(); ++i) vdst[i] = vsrc[idx[i]];
+    } else {
+      const size_t vbytes = (size_t)n * sizeof(Vertex);
+      if (!vertex_ring_[slot_].alloc(vbytes, 256, &vcpu, &voffset)) { if (!ring_full_logged_) { host::log("metal: vertex ring full"); ring_full_logged_ = true; } return; }
+      std::memcpy(vcpu, vsrc, vbytes);
+      uint8_t* icpu;
+      if (!index_ring_[slot_].alloc(idx.size() * 4, 256, &icpu, &ioffset)) { if (!ring_full_logged_) { host::log("metal: index ring full"); ring_full_logged_ = true; } return; }
+      std::memcpy(icpu, idx.data(), idx.size() * 4);
+    }
     uint8_t* ccpu; size_t vs_offset, ps_offset;
     if (!constant_ring_[slot_].alloc(sizeof(VSConstants), 256, &ccpu, &vs_offset)) { if (!ring_full_logged_) { host::log("metal: constant ring full"); ring_full_logged_ = true; } return; }
     VSConstants vs_constants;
@@ -511,18 +526,45 @@ class MetalBackend final : public Backend {
     fill_ps_constants(dc, ps_constants, scale_);
     std::memcpy(ccpu, &ps_constants, sizeof ps_constants);
 
+    ++draw_index_;
+    if (max_draws_ && draw_index_ > max_draws_) return;   // MELEE_METAL_MAXDRAWS: bisect a broken frame
+    if (trace_interval_ && frame_counter_ % trace_interval_ == 1 && trace_draws_++ < 600) {
+      uint8_t pm_lo = 255, pm_hi = 0; float px[3] = {vsrc[0].pos[0], vsrc[0].pos[1], vsrc[0].pos[2]};
+      for (uint32_t i = 0; i < n; ++i) { pm_lo = std::min(pm_lo, vsrc[i].posmtx); pm_hi = std::max(pm_hi, vsrc[i].posmtx); }
+      const float* T = &vs_constants.transformmatrices[pm_lo * 3][0];
+      const float* P = &vs_constants.projection[0][0];
+      host::log("trace f%llu d%u prim=%u n=%u idx=%zu posmtx=%u..%u v0=(%.2f %.2f %.2f) vp=(%.0f %.0f %.0f %.0f z=%.4f..%.4f) sc=(%d %d %d %d) zmode=%02X blend=%08X "
+                "proj=[%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f] T0=[%.3f %.3f %.3f %.2f | %.3f %.3f %.3f %.2f | %.3f %.3f %.3f %.2f]",
+                (unsigned long long)frame_counter_, trace_draws_, (unsigned)prim, n, idx.size(), pm_lo, pm_hi, px[0], px[1], px[2], X, Y, W, H, min_depth, max_depth,
+                sl, st, sr, sb, dc.bp.zmode() & 0x1F, dc.bp.reg[BP_BLENDMODE],
+                P[0], P[1], P[2], P[3], P[4], P[5], P[6], P[7], P[8], P[9], P[10], P[11], P[12], P[13], P[14], P[15],
+                T[0], T[1], T[2], T[3], T[4], T[5], T[6], T[7], T[8], T[9], T[10], T[11]);
+    }
     id<MTLRenderPipelineState> pipeline = get_pipeline(dc, prim);
     if (!pipeline) return;
     ensure_efb_pass();
     if (pipeline != bound_pipeline_) { [encoder_ setRenderPipelineState:pipeline]; bound_pipeline_ = pipeline; }
-    id<MTLDepthStencilState> depth = depth_state(dc.bp.zmode() & 0x1F);
+    id<MTLDepthStencilState> depth = depth_state(no_depth_ ? 0u : (dc.bp.zmode() & 0x1F));
     if (depth != bound_depth_) { [encoder_ setDepthStencilState:depth]; bound_depth_ = depth; }
     static const MTLCullMode cull_modes[] = {MTLCullModeNone, MTLCullModeBack, MTLCullModeFront, MTLCullModeBack};
-    const int cull = dc.bp.cullmode() & 3;
+    const int cull = cull_none_ ? 0 : (dc.bp.cullmode() & 3);
     if (cull != bound_cull_) { [encoder_ setCullMode:cull_modes[cull]]; bound_cull_ = cull; }
-    [encoder_ setVertexBufferOffset:voffset atIndex:0];
-    [encoder_ setVertexBuffer:constant_ring_[slot_].buffer offset:vs_offset atIndex:1];
-    [encoder_ setFragmentBuffer:constant_ring_[slot_].buffer offset:ps_offset atIndex:1];
+    if (per_draw_buffers_) {
+      // Diagnostic path: every draw gets its own freshly allocated buffers (no ring offsets at all).
+      id<MTLBuffer> vb = [device_ newBufferWithBytes:vcpu length:(no_index_ ? idx.size() : n) * sizeof(Vertex) options:MTLResourceStorageModeShared];
+      id<MTLBuffer> cb = [device_ newBufferWithBytes:&vs_constants length:sizeof vs_constants options:MTLResourceStorageModeShared];
+      id<MTLBuffer> pb = [device_ newBufferWithBytes:&ps_constants length:sizeof ps_constants options:MTLResourceStorageModeShared];
+      [encoder_ setVertexBuffer:vb offset:0 atIndex:0];
+      [encoder_ setVertexBuffer:cb offset:0 atIndex:1];
+      [encoder_ setFragmentBuffer:pb offset:0 atIndex:1];
+      per_draw_keep_.push_back(vb); per_draw_keep_.push_back(cb); per_draw_keep_.push_back(pb);
+    } else {
+      // Always a full bind: the iOS Simulator's Metal shim mishandles setVertexBufferOffset: (draws
+      // after the first read stale vertex data), and a full bind costs nothing on real devices.
+      [encoder_ setVertexBuffer:vertex_ring_[slot_].buffer offset:voffset atIndex:0];
+      [encoder_ setVertexBuffer:constant_ring_[slot_].buffer offset:vs_offset atIndex:1];
+      [encoder_ setFragmentBuffer:constant_ring_[slot_].buffer offset:ps_offset atIndex:1];
+    }
     id<MTLTexture> textures[8]; id<MTLSamplerState> samplers[8];
     for (int i = 0; i < 8; ++i) {
       textures[i] = dc.textures[i].used ? get_texture(dc.textures[i]) : nil;
@@ -531,11 +573,17 @@ class MetalBackend final : public Backend {
     }
     [encoder_ setFragmentTextures:textures withRange:NSMakeRange(0, 8)];
     [encoder_ setFragmentSamplerStates:samplers withRange:NSMakeRange(0, 8)];
+    if (full_z_) { min_depth = 0.0f; max_depth = 1.0f; }
     MTLViewport viewport{X, Y, std::max(W, 1.0f), std::max(H, 1.0f), min_depth, max_depth};
     [encoder_ setViewport:viewport];
     MTLScissorRect scissor{(NSUInteger)(sl * scale_), (NSUInteger)(st * scale_), (NSUInteger)((sr - sl) * scale_), (NSUInteger)((sb - st) * scale_)};
     [encoder_ setScissorRect:scissor];
-    [encoder_ drawIndexedPrimitives:prim indexCount:idx.size() indexType:MTLIndexTypeUInt32 indexBuffer:index_ring_[slot_].buffer indexBufferOffset:ioffset];
+    if (no_index_) [encoder_ drawPrimitives:prim vertexStart:0 vertexCount:idx.size()];
+    else if (per_draw_buffers_) {
+      id<MTLBuffer> ib = [device_ newBufferWithBytes:idx.data() length:idx.size() * 4 options:MTLResourceStorageModeShared];
+      per_draw_keep_.push_back(ib);
+      [encoder_ drawIndexedPrimitives:prim indexCount:idx.size() indexType:MTLIndexTypeUInt32 indexBuffer:ib indexBufferOffset:0];
+    } else [encoder_ drawIndexedPrimitives:prim indexCount:idx.size() indexType:MTLIndexTypeUInt32 indexBuffer:index_ring_[slot_].buffer indexBufferOffset:ioffset];
     ++draws_this_frame_;
   }
 
@@ -737,6 +785,8 @@ class MetalBackend final : public Backend {
   }
 
   void submit(const Frame& frame, const DrawMatrices* overrides) {
+    trace_draws_ = 0; draw_index_ = 0;
+    per_draw_keep_.clear();   // previous frames' diagnostic buffers (retained by their command buffers until completion)
     static thread_local bool qos_set = false;
     if (!qos_set) { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0); qos_set = true; }   // render thread on performance cores
     @autoreleasepool {
@@ -808,6 +858,17 @@ class MetalBackend final : public Backend {
   id<MTLRenderPipelineState> blit_present_ = nil, blit_copy_ = nil, clear_pipeline_ = nil, overlay_pipeline_ = nil;
   OverlayProvider overlay_;
   host::OverlayFrame overlay_frame_;
+  uint64_t trace_interval_ = [] { const char* e = std::getenv("MELEE_METAL_TRACE"); return e ? (uint64_t)std::strtoull(e, nullptr, 0) : 0ull; }();
+  uint32_t trace_draws_ = 0, draw_index_ = 0;
+  uint32_t max_draws_ = [] { const char* e = std::getenv("MELEE_METAL_MAXDRAWS"); return e ? (uint32_t)std::strtoul(e, nullptr, 0) : 0u; }();
+  bool winding_ccw_ = [] { const char* e = std::getenv("MELEE_METAL_WINDING"); return e && e[0] == 'c' && e[1] == 'c'; }();
+  bool cull_none_ = [] { const char* e = std::getenv("MELEE_METAL_NOCULL"); return e && *e != '0'; }();
+  bool no_depth_ = [] { const char* e = std::getenv("MELEE_METAL_NODEPTH"); return e && *e != '0'; }();
+  bool per_draw_buffers_ = [] { const char* e = std::getenv("MELEE_METAL_PERDRAWBUF"); return e && *e != '0'; }();
+  std::vector<id<MTLBuffer>> per_draw_keep_;
+  bool z_clamp_ = [] { const char* e = std::getenv("MELEE_METAL_ZCLAMP"); return e && *e != '0'; }();
+  bool full_z_ = [] { const char* e = std::getenv("MELEE_METAL_FULLZ"); return e && *e != '0'; }();
+  bool no_index_ = [] { const char* e = std::getenv("MELEE_METAL_NOINDEX"); return e && *e != '0'; }();   // diagnostic
   id<MTLTexture> overlay_atlas_ = nil;
   float overlay_labels_[16][4] = {};
   id<MTLDepthStencilState> clear_depth_state_ = nil;
