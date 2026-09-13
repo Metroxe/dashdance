@@ -361,6 +361,13 @@ endif()
 if(MELEE_BUILD_PORT_METAL)
   if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "visionOS" OR CMAKE_SYSTEM_NAME STREQUAL "tvOS")
     set(MELEE_DEVICE_TARGET ON)
+    if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+      set(MELEE_DEVICE_FAMILY "<integer>7</integer>")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "tvOS")
+      set(MELEE_DEVICE_FAMILY "<integer>3</integer>")
+    else()
+      set(MELEE_DEVICE_FAMILY "<integer>1</integer><integer>2</integer>")
+    endif()
   else()
     set(MELEE_DEVICE_TARGET OFF)
   endif()
@@ -459,10 +466,11 @@ endif()
   # Aurora is only built here for its vendored SDL3.
   add_library(runtime_mac STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} runtime/hle/slippi_text.cpp
     runtime/hle/slippi_http_apple.mm
-    runtime/host/window_sdl.cpp runtime/host/audio_sdl.cpp ${PORT_GC_ADAPTER_SOURCE} ${PORT_APPLE_LAUNCHER_SOURCE}
+    runtime/host/window_sdl.cpp runtime/host/audio_sdl.cpp runtime/host/haptics_apple.mm
+    ${PORT_GC_ADAPTER_SOURCE} ${PORT_APPLE_LAUNCHER_SOURCE}
     runtime/gx/gx_metal.mm runtime/gx/gx_msl.cpp)
-  set_source_files_properties(runtime/gx/gx_metal.mm runtime/hle/slippi_http_apple.mm ${PORT_APPLE_LAUNCHER_SOURCE}
-    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  set_source_files_properties(runtime/gx/gx_metal.mm runtime/hle/slippi_http_apple.mm runtime/host/haptics_apple.mm
+    ${PORT_APPLE_LAUNCHER_SOURCE} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   target_include_directories(runtime_mac PUBLIC runtime/ppc runtime/host runtime/hle runtime/gx
     "${PORT_GEN}" "${PROJECT_SOURCE_DIR}/native" third_party)
   target_compile_features(runtime_mac PUBLIC cxx_std_17)
@@ -471,7 +479,7 @@ endif()
     MELEE_PORT_INPUT_MANIFEST_PATH="${MELEE_PORT_INPUT_MANIFEST}"
     MELEE_PORT_INPUT_MANIFEST_SHA256="${MELEE_PORT_INPUT_MANIFEST_SHA256}")
   target_link_libraries(runtime_mac PUBLIC native_animation port_build_options Threads::Threads port_enet
-    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation" "-framework Metal" "-framework QuartzCore"
+    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation" "-framework Metal" "-framework QuartzCore" "-framework CoreText" "-framework CoreGraphics"
     ${AURORA_SDL3_TARGET})
   if(LIBUSB_FOUND AND NOT MELEE_DEVICE_TARGET)
     target_link_libraries(runtime_mac PUBLIC PkgConfig::LIBUSB)

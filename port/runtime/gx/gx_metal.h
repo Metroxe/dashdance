@@ -4,7 +4,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include "gx_core.h"
+#include "overlay.h"
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace gx {
@@ -25,4 +27,7 @@ Backend* create_metal_backend(void* layer, int w, int h, const MetalOptions& opt
 void metal_resize(Backend* backend, int w, int h);
 void metal_set_options(Backend* backend, const MetalOptions& options);
 uint64_t metal_frames_presented(Backend* backend);
+// Drawn over every presented frame (touch controls); the provider runs on the render thread.
+using OverlayProvider = std::function<bool(host::OverlayFrame&)>;
+void metal_set_overlay(Backend* backend, OverlayProvider provider);
 }  // namespace gx

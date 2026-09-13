@@ -8,6 +8,7 @@
 #include "gx_shader.h"
 #include "gx_texture.h"
 #include "host.h"
+#include <CoreText/CoreText.h>
 #include <dispatch/dispatch.h>
 #include <algorithm>
 #include <cmath>
@@ -94,6 +95,44 @@ vertex ClearO clear_vs(uint id [[vertex_id]], constant ClearC& c [[buffer(0)]]) 
   o.pos = float4(p * float2(2, -2) + float2(-1, 1), c.depth, 1); return o;
 }
 fragment float4 clear_ps(ClearO i [[stage_in]], constant ClearC& c [[buffer(0)]]) { return c.color; }
+
+// Controller overlay: one rounded-rect / circle / ring per instance, signed-distance
+// anti-aliased, labels sampled from a CoreText atlas (system font).
+struct OvShape { float4 rect; float4 color; float4 params; uint label; float label_w; float label_h; float pad; };
+struct OvC { float2 size; float alpha; float pad; float4 labels[16]; };
+struct OvO { float4 pos [[position]]; float2 px; uint id [[flat]]; };
+vertex OvO overlay_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant OvShape* shapes [[buffer(0)]], constant OvC& c [[buffer(1)]]) {
+  float4 r = shapes[iid].rect + float4(-2, -2, 2, 2);
+  float2 p = float2((vid == 1 || vid == 2 || vid == 4) ? r.z : r.x, (vid == 2 || vid == 4 || vid == 5) ? r.w : r.y);
+  OvO o; o.px = p; o.id = iid;
+  o.pos = float4(p / c.size * float2(2, -2) + float2(-1, 1), 0, 1);
+  return o;
+}
+float label_coverage(OvShape s, constant OvC& c, float2 p, texture2d<float> atlas, sampler samp) {
+  if (s.label == 0u || s.label >= 16u) return 0.0;
+  float4 l = c.labels[s.label];   // atlas rect in texels: x, y, w, h
+  if (l.w <= 0.0) return 0.0;
+  float aspect = l.z / l.w;
+  float lw = min(s.label_w, s.label_h * aspect), lh = lw / aspect;
+  float2 centre = (s.rect.xy + s.rect.zw) * 0.5;
+  float2 q = (p - centre) / float2(lw, lh) + 0.5;
+  if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0) return 0.0;
+  float2 texel = l.xy + q * l.zw;
+  return atlas.sample(samp, texel / float2(atlas.get_width(), atlas.get_height())).r;
+}
+fragment float4 overlay_ps(OvO i [[stage_in]], constant OvShape* shapes [[buffer(0)]], constant OvC& c [[buffer(1)]],
+                           texture2d<float> atlas [[texture(0)]], sampler samp [[sampler(0)]]) {
+  OvShape s = shapes[i.id];
+  float2 half_size = (s.rect.zw - s.rect.xy) * 0.5, centre = (s.rect.xy + s.rect.zw) * 0.5;
+  float corner = min(s.params.x, min(half_size.x, half_size.y));
+  float2 q = abs(i.px - centre) - (half_size - corner);
+  float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - corner;
+  float fill = 1.0 - smoothstep(-0.75, 0.75, d);
+  float label = label_coverage(s, c, i.px, atlas, samp) * fill;
+  float3 col = mix(s.color.rgb, float3(1.0), label);
+  float a = max(fill * s.color.a, label * 0.95);
+  return float4(col * a * c.alpha, a * c.alpha);
+}
 )";
 
 class MetalBackend final : public Backend {
@@ -120,6 +159,7 @@ class MetalBackend final : public Backend {
     if (resample) { wait_idle(); samplers_.clear(); }
   }
   uint64_t frames_presented() const { return frames_presented_; }
+  void set_overlay(OverlayProvider provider) { overlay_ = std::move(provider); }
 
  private:
   // ---- setup
@@ -165,20 +205,28 @@ class MetalBackend final : public Backend {
     MTLCompileOptions* options = [MTLCompileOptions new];
     id<MTLLibrary> lib = [device_ newLibraryWithSource:[NSString stringWithUTF8String:kBlitSource] options:options error:&error];
     if (!lib) host::die("metal: blit shaders: %s", error.localizedDescription.UTF8String);
-    auto make = [&](const char* vs, const char* ps, MTLPixelFormat color, bool depth, bool write_color) {
+    auto make = [&](const char* vs, const char* ps, MTLPixelFormat color, bool depth, bool blend) {
       MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
       d.vertexFunction = [lib newFunctionWithName:[NSString stringWithUTF8String:vs]];
       d.fragmentFunction = [lib newFunctionWithName:[NSString stringWithUTF8String:ps]];
       d.colorAttachments[0].pixelFormat = color;
-      d.colorAttachments[0].writeMask = write_color ? MTLColorWriteMaskAll : MTLColorWriteMaskAll;
+      if (blend) {   // premultiplied alpha
+        d.colorAttachments[0].blendingEnabled = YES;
+        d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+        d.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+        d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+      }
       if (depth) d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
       id<MTLRenderPipelineState> state = [device_ newRenderPipelineStateWithDescriptor:d error:&error];
       if (!state) host::die("metal: pipeline %s/%s: %s", vs, ps, error.localizedDescription.UTF8String);
       return state;
     };
-    blit_present_ = make("blit_vs", "blit_ps", MTLPixelFormatBGRA8Unorm, false, true);
-    blit_copy_ = make("blit_vs", "blit_ps", MTLPixelFormatRGBA8Unorm, false, true);
-    clear_pipeline_ = make("clear_vs", "clear_ps", MTLPixelFormatRGBA8Unorm, true, true);
+    blit_present_ = make("blit_vs", "blit_ps", MTLPixelFormatBGRA8Unorm, false, false);
+    blit_copy_ = make("blit_vs", "blit_ps", MTLPixelFormatRGBA8Unorm, false, false);
+    clear_pipeline_ = make("clear_vs", "clear_ps", MTLPixelFormatRGBA8Unorm, true, false);
+    overlay_pipeline_ = make("overlay_vs", "overlay_ps", MTLPixelFormatBGRA8Unorm, false, true);
+    create_overlay_atlas();
     MTLDepthStencilDescriptor* ds = [MTLDepthStencilDescriptor new];
     ds.depthCompareFunction = MTLCompareFunctionAlways; ds.depthWriteEnabled = YES;
     clear_depth_state_ = [device_ newDepthStencilStateWithDescriptor:ds];
@@ -571,7 +619,8 @@ class MetalBackend final : public Backend {
     const float aspect = output_aspect();
     float vw = ww, vh = ww / aspect;
     if (vh > wh) { vh = wh; vw = wh * aspect; }
-    [enc setViewport:MTLViewport{(ww - vw) * 0.5, (wh - vh) * 0.5, vw, vh, 0, 1}];
+    const bool portrait = wh > ww * 1.05f;   // touch devices held upright: game on top, controls below
+    [enc setViewport:MTLViewport{(ww - vw) * 0.5, portrait ? 0.0 : (wh - vh) * 0.5, vw, vh, 0, 1}];
     BlitConstants bc{{(float)c.src_w / EFB_WIDTH, (float)c.src_h / EFB_HEIGHT, (float)c.src_x / EFB_WIDTH, (float)c.src_y / EFB_HEIGHT},
                      {1.0f / std::max((float)efb_w_, 1.0f), 1.0f / std::max((float)efb_h_, 1.0f), std::clamp(opts_.sharpness, 0.0f, 1.0f), 0.0f},
                      {1, 1, 0, 0}};
@@ -583,10 +632,76 @@ class MetalBackend final : public Backend {
     [enc setFragmentTexture:efb_color_ atIndex:0];
     [enc setFragmentSamplerState:blit_sampler_ atIndex:0];
     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    draw_overlay(enc, ww, wh);
     [enc endEncoding];
     drawable_ = drawable;
     last_present_ = c;
   }
+
+  struct OvShape { float rect[4]; float color[4]; float params[4]; uint32_t label; float label_w, label_h, pad; };
+  struct OvConstants { float size[2]; float alpha; float pad; float labels[16][4]; };
+
+  // Renders the button labels once with the bold system font into an R8 atlas.
+  void create_overlay_atlas() {
+    const int W = 2048, H = 128, font_px = 88;
+    std::vector<uint8_t> pixels((size_t)W * H, 0);
+    CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
+    CGContextRef ctx = CGBitmapContextCreate(pixels.data(), W, H, 8, W, gray, kCGImageAlphaNone);
+    CGFloat white[] = {1.0, 1.0};
+    CGColorRef fg = CGColorCreate(gray, white);
+    CGColorSpaceRelease(gray);
+    CTFontRef font = CTFontCreateUIFontForLanguage(kCTFontUIFontEmphasizedSystem, font_px, nullptr);
+    // Work in top-down coordinates: flip the CTM and the text matrix so glyphs stay upright.
+    CGContextTranslateCTM(ctx, 0, H);
+    CGContextScaleCTM(ctx, 1, -1);
+    CGContextSetTextMatrix(ctx, CGAffineTransformMakeScale(1, -1));
+    int x = 4;
+    for (int i = 1; i < host::kOverlayLabelCount && i < 16; ++i) {
+      NSDictionary* attrs = @{(id)kCTFontAttributeName: (__bridge id)font, (id)kCTForegroundColorAttributeName: (__bridge id)fg};
+      NSAttributedString* text = [[NSAttributedString alloc] initWithString:[NSString stringWithUTF8String:host::kOverlayLabels[i]] attributes:attrs];
+      CTLineRef line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)text);
+      CGRect bounds = CTLineGetBoundsWithOptions(line, kCTLineBoundsUseGlyphPathBounds);
+      const int w = (int)std::ceil(bounds.size.width) + 4, h = (int)std::ceil(bounds.size.height) + 4;
+      if (x + w > W || h > H) { CFRelease(line); break; }
+      // Glyph box 2px below the top edge, 2px right of `x` (top-down space, flipped text matrix).
+      CGContextSetTextPosition(ctx, x + 2 - bounds.origin.x, 2 + bounds.origin.y + bounds.size.height);
+      CTLineDraw(line, ctx);
+      CFRelease(line);
+      overlay_labels_[i][0] = (float)x; overlay_labels_[i][1] = 0.0f; overlay_labels_[i][2] = (float)w; overlay_labels_[i][3] = (float)h;
+      x += w + 4;
+    }
+    CFRelease(font); CFRelease(fg); CGContextRelease(ctx);
+    std::vector<uint8_t>& flipped = pixels;   // already top-down
+    if (const char* dump = std::getenv("MELEE_DUMP_ATLAS")) {
+      std::ofstream out(dump, std::ios::binary);
+      out << "P5\n" << W << " " << H << "\n255\n";
+      out.write((const char*)flipped.data(), (std::streamsize)flipped.size());
+    }
+    MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Unorm width:W height:H mipmapped:NO];
+    td.usage = MTLTextureUsageShaderRead;
+    overlay_atlas_ = [device_ newTextureWithDescriptor:td];
+    [overlay_atlas_ replaceRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0 withBytes:flipped.data() bytesPerRow:W];
+  }
+  void draw_overlay(id<MTLRenderCommandEncoder> enc, float ww, float wh) {
+    if (!overlay_ || !overlay_(overlay_frame_) || overlay_frame_.shapes.empty()) return;
+    static_assert(sizeof(OvShape) == 64, "overlay shape layout must match the shader");
+    std::vector<OvShape> shapes;
+    shapes.reserve(overlay_frame_.shapes.size());
+    for (const host::OverlayShape& s : overlay_frame_.shapes)
+      shapes.push_back({{s.x0, s.y0, s.x1, s.y1}, {s.r, s.g, s.b, s.a}, {s.corner, s.ring, s.pressed, 0.0f}, s.label, s.label_w, s.label_h, 0.0f});
+    OvConstants oc{{ww, wh}, overlay_frame_.alpha, 0.0f, {}};
+    std::memcpy(oc.labels, overlay_labels_, sizeof oc.labels);
+    [enc setViewport:MTLViewport{0, 0, ww, wh, 0, 1}];
+    [enc setRenderPipelineState:overlay_pipeline_];
+    [enc setVertexBytes:shapes.data() length:shapes.size() * sizeof(OvShape) atIndex:0];
+    [enc setVertexBytes:&oc length:sizeof oc atIndex:1];
+    [enc setFragmentBytes:shapes.data() length:shapes.size() * sizeof(OvShape) atIndex:0];
+    [enc setFragmentBytes:&oc length:sizeof oc atIndex:1];
+    [enc setFragmentTexture:overlay_atlas_ atIndex:0];
+    [enc setFragmentSamplerState:blit_sampler_ atIndex:0];
+    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6 instanceCount:shapes.size()];
+  }
+
 
   void capture(const EfbCopy& c, const std::string& path) {
     // Reads the presented EFB region back through a shared texture (development aid).
@@ -678,7 +793,11 @@ class MetalBackend final : public Backend {
   dispatch_semaphore_t frame_semaphore_ = nullptr;
   Ring vertex_ring_[FRAME_SLOTS], index_ring_[FRAME_SLOTS], constant_ring_[FRAME_SLOTS];
   MTLVertexDescriptor* vertex_descriptor_ = nil;
-  id<MTLRenderPipelineState> blit_present_ = nil, blit_copy_ = nil, clear_pipeline_ = nil;
+  id<MTLRenderPipelineState> blit_present_ = nil, blit_copy_ = nil, clear_pipeline_ = nil, overlay_pipeline_ = nil;
+  OverlayProvider overlay_;
+  host::OverlayFrame overlay_frame_;
+  id<MTLTexture> overlay_atlas_ = nil;
+  float overlay_labels_[16][4] = {};
   id<MTLDepthStencilState> clear_depth_state_ = nil;
   id<MTLSamplerState> blit_sampler_ = nil;
   id<MTLTexture> efb_color_ = nil, efb_depth_ = nil, white_ = nil;
@@ -708,5 +827,6 @@ Backend* create_metal_backend(void* layer, int w, int h, const MetalOptions& opt
 void metal_resize(Backend* backend, int w, int h) { static_cast<MetalBackend*>(backend)->resize(w, h); }
 void metal_set_options(Backend* backend, const MetalOptions& options) { static_cast<MetalBackend*>(backend)->set_options(options); }
 uint64_t metal_frames_presented(Backend* backend) { return static_cast<MetalBackend*>(backend)->frames_presented(); }
+void metal_set_overlay(Backend* backend, OverlayProvider provider) { static_cast<MetalBackend*>(backend)->set_overlay(std::move(provider)); }
 
 }  // namespace gx

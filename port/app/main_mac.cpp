@@ -6,6 +6,7 @@
 #include "gecko_data.h"
 #include "gx_core.h"
 #include "gx_metal.h"
+#include "overlay.h"
 #include "hle_dvd.h"
 #include "host.h"
 #include "mac_launcher.h"
@@ -49,6 +50,8 @@ void usage() {
       "  --scale N|auto           internal resolution multiplier (default auto)\n"
       "  --widescreen             Slippi 16:9 code and 16:9 presentation\n"
       "  --sharpness 0..1         contrast-adaptive sharpening\n"
+      "  --touch-overlay          show the on-screen controller (default on touch devices)\n"
+      "  --overlay-opacity 0..1   on-screen controller opacity\n"
       "  --anisotropy 1..16       anisotropic filtering (default 16)\n"
       "  --capture FILE.ppm       write the presented frame N (--capture-frame N)\n"
       "  --offline                disable Slippi Online services\n"
@@ -143,6 +146,8 @@ int main(int argc, char** argv) {
     else if (a == "--scale") { std::string v = next(); gfx.efb_scale = v == "auto" ? 0 : std::atoi(v.c_str()); if (v != "auto" && gfx.efb_scale < 1) { usage(); return 2; } }
     else if (a == "--widescreen") gfx.widescreen = true;
     else if (a == "--sharpness") gfx.sharpness = std::clamp((float)std::atof(next()), 0.0f, 1.0f);
+    else if (a == "--touch-overlay") host::touch_force_visible(true);
+    else if (a == "--overlay-opacity") host::touch_set_opacity((float)std::atof(next()));
     else if (a == "--anisotropy") gfx.anisotropy = std::clamp(std::atoi(next()), 1, 16);
     else if (a == "--capture") gfx.capture_path = next();
     else if (a == "--capture-frame") gfx.capture_frame = (uint32_t)std::strtoul(next(), nullptr, 0);
@@ -247,6 +252,7 @@ int main(int argc, char** argv) {
     host::window_client_size(&client_w, &client_h);
     backend = gx::create_metal_backend(layer, client_w, client_h, gfx);
     host::window_set_resize_callback([backend](int w, int h) { gx::metal_resize(backend, w, h); });
+    gx::metal_set_overlay(backend, host::touch_overlay);
     host::g_has_window = true;
     gx::init(backend);
     if (!host::audio_open(o.volume, o.audio_dump.c_str(), true)) host::log("audio: device unavailable, continuing silent");
