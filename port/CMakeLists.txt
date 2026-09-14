@@ -314,7 +314,11 @@ set(PORT_PORTABLE_RUNTIME_SOURCES
 
 # Artifact identity: invalidate before link, verify after. Shared by every
 # generated-game executable.
+option(MELEE_ARTIFACT_VERIFY "Verify the linked artifact against the input manifest (off for Xcode-generator device builds, whose per-config paths the step cannot resolve)" ON)
 function(port_add_artifact_verification target)
+  if(NOT MELEE_ARTIFACT_VERIFY)
+    return()
+  endif()
   add_custom_command(TARGET ${target} PRE_LINK
     COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/verify_port_inputs.py"
             --manifest "${MELEE_PORT_INPUT_MANIFEST}" --source-root "${PROJECT_SOURCE_DIR}"
@@ -359,6 +363,8 @@ if(MELEE_BUILD_PORT_HEADLESS)
 endif()
 
 if(MELEE_BUILD_PORT_METAL)
+  set(MELEE_IOS_BUNDLE_ID "app.islippi.ios" CACHE STRING "Bundle identifier for the iOS/visionOS app")
+  set(MELEE_APPLE_TEAM "" CACHE STRING "Apple developer team id for automatic signing of device builds (Xcode generator)")
   if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "visionOS" OR CMAKE_SYSTEM_NAME STREQUAL "tvOS")
     set(MELEE_DEVICE_TARGET ON)
     if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
@@ -502,11 +508,21 @@ if(MELEE_BUILD_PORT_METAL)
     set_target_properties(melee_port_mac PROPERTIES
       MACOSX_BUNDLE TRUE OUTPUT_NAME "iSlippi"
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/app/ios/Info.plist.in"
-      MACOSX_BUNDLE_GUI_IDENTIFIER app.islippi.ios
+      MACOSX_BUNDLE_GUI_IDENTIFIER "${MELEE_IOS_BUNDLE_ID}"
       MACOSX_BUNDLE_BUNDLE_NAME "iSlippi"
       MACOSX_BUNDLE_BUNDLE_VERSION "${MELEE_PORT_VERSION}"
       MACOSX_BUNDLE_SHORT_VERSION_STRING "${MELEE_PORT_VERSION}"
-      XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2,7")
+      XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2,7"
+      XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${MELEE_IOS_BUNDLE_ID}")
+    if(MELEE_APPLE_TEAM)
+      # Device builds through the Xcode generator: automatic signing with the developer's team
+      # (a free personal team works; the bundle id is made unique per team by setup.sh).
+      set_target_properties(melee_port_mac PROPERTIES
+        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${MELEE_APPLE_TEAM}"
+        XCODE_ATTRIBUTE_CODE_SIGN_STYLE Automatic
+        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Apple Development"
+        XCODE_ATTRIBUTE_PROVISIONING_PROFILE_SPECIFIER "")
+    endif()
     # The Slippi Sys folder ships inside the bundle so the app is self-contained.
     add_custom_command(TARGET melee_port_mac POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/slippi_sys"

@@ -5,6 +5,9 @@
 #   ./setup.sh /path/to/melee.iso            macOS app (default)
 #   ./setup.sh /path/to/melee.iso --ios      iPad/iPhone Simulator app (needs Xcode)
 #   ./setup.sh /path/to/melee.iso --visionos Vision Pro Simulator app (needs Xcode)
+#   ./setup.sh /path/to/melee.iso --device   your own iPhone/iPad: dist/iSlippi.ipa for AltStore / SideStore /
+#                                            Sideloadly (no developer account needed), or add --team <TEAMID>
+#                                            (or --team auto) to sign with your Apple ID and install over USB
 #
 # Environment overrides: ISLIPPI_ISO (disc path), ISLIPPI_DECOMP (existing doldecomp/melee checkout),
 # ISLIPPI_JOBS (parallel jobs). Re-running is safe: every step skips work that is already done.
@@ -13,8 +16,16 @@ ROOT="${0:A:h}"
 step() { printf '\n\033[1;33m==> %s\033[0m\n' "$1"; }
 fail() { printf '\033[1;31merror:\033[0m %s\n' "$1" >&2; exit 1; }
 ISO="${ISLIPPI_ISO:-}"
-TARGET="mac"
-for arg in "$@"; do case "$arg" in --ios) TARGET=ios;; --visionos) TARGET=visionos;; --mac) TARGET=mac;; --*) fail "unknown option $arg";; *) ISO="$arg";; esac; done
+TARGET="mac"; TEAM="${ISLIPPI_TEAM:-}"; UDID="${ISLIPPI_UDID:-}"
+expect=""
+for arg in "$@"; do
+  if [[ -n "$expect" ]]; then eval "$expect=\$arg"; expect=""; continue; fi
+  case "$arg" in
+    --ios) TARGET=ios;; --visionos) TARGET=visionos;; --mac) TARGET=mac;; --device) TARGET=device;;
+    --team) expect=TEAM;; --team=*) TEAM="${arg#--team=}";; --udid) expect=UDID;; --udid=*) UDID="${arg#--udid=}";;
+    --*) fail "unknown option $arg";; *) ISO="$arg";;
+  esac
+done
 
 [[ "$(uname)" == "Darwin" ]] || fail "iSlippi builds on macOS (Apple silicon). See README.md for other platforms."
 [[ "$(uname -m)" == "arm64" ]] || fail "an Apple silicon Mac is required."
@@ -69,6 +80,78 @@ case "$TARGET" in
     echo
     echo "Done. Opening dist/iSlippi.app — choose your disc in the dashboard the first time (it is remembered)."
     open "$ROOT/dist/iSlippi.app" --args --iso "$ISO" --choose-disc
+    ;;
+  device)
+    # Your own iPhone or iPad. The app contains the translated game, so it is for your own device only;
+    # see README "iPhone and iPad (your own device)".
+    if [[ "$TEAM" == "auto" ]]; then
+      TEAM="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"Apple Development: .* (\([A-Z0-9]*\))".*/\1/p' | head -1)"
+      [[ -n "$TEAM" ]] || fail "no 'Apple Development' signing identity in your keychain; sign in to Xcode (Settings › Accounts) first, or run without --team for an IPA to sideload."
+      echo "signing team: $TEAM (from your Apple Development certificate)"
+    fi
+    if [[ -z "$TEAM" ]]; then
+      BUILD="$ROOT/build/ios-device"
+      step "Generating the port"
+      python3 "$ROOT/tools/bootstrap_port.py" --decomp-root "$DECOMP" --dol "$DOL" --build-dir "$BUILD" --gct-base 0x8065CC80 --macos-arch arm64 --stage generate
+      step "Building the iPhone/iPad app (arm64, iOS 17+)"
+      cmake -S "$ROOT" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+        -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+        -DMELEE_DECOMP_ROOT="$DECOMP" -DMELEE_DOL_PATH="$DOL" -DMELEE_PORT_GENERATED_DIR="$BUILD/generated/guest" \
+        -DMELEE_BUILD_PORT_TESTS=OFF -DMELEE_BUILD_PORT_HEADLESS=OFF -DMELEE_BUILD_PORT_METAL=ON >/dev/null
+      cmake --build "$BUILD" --target melee_port_mac --parallel "$JOBS"
+      APP="$BUILD/port/iSlippi.app"
+      step "Packaging dist/iSlippi.ipa (ad-hoc signed; your sideloading app re-signs it with your Apple ID)"
+      codesign --force --sign - --timestamp=none "$APP"
+      rm -rf "$ROOT/dist/ipa" && mkdir -p "$ROOT/dist/ipa/Payload" && cp -R "$APP" "$ROOT/dist/ipa/Payload/"
+      (cd "$ROOT/dist/ipa" && rm -f ../iSlippi.ipa && zip -qry ../iSlippi.ipa Payload) && rm -rf "$ROOT/dist/ipa"
+      echo
+      echo "Done: $ROOT/dist/iSlippi.ipa"
+      echo "Install it with AltStore (altstore.io), SideStore (sidestore.io) or Sideloadly (sideloadly.io): open the IPA in the"
+      echo "sideloading app, sign in with your Apple ID, and it installs on your device (a free Apple ID re-signs every 7 days;"
+      echo "a paid developer account lasts a year). Then copy your disc image into the app's folder in the Files app,"
+      echo "or drop it in from Finder (device › Files › iSlippi). Prefer USB with your own Apple ID? Re-run with --team auto."
+    else
+      BUILD="$ROOT/build/ios-xcode"
+      BID="app.islippi.ios.$(echo "$TEAM" | tr '[:upper:]' '[:lower:]')"   # unique per team, so automatic signing can register it
+      step "Generating the port"
+      python3 "$ROOT/tools/bootstrap_port.py" --decomp-root "$DECOMP" --dol "$DOL" --build-dir "$BUILD" --gct-base 0x8065CC80 --macos-arch arm64 --stage generate
+      step "Building and signing with Xcode (team $TEAM, bundle id $BID)"
+      cmake -S "$ROOT" -B "$BUILD" -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+        -DMELEE_APPLE_TEAM="$TEAM" -DMELEE_IOS_BUNDLE_ID="$BID" -DMELEE_ARTIFACT_VERIFY=OFF \
+        -DMELEE_DECOMP_ROOT="$DECOMP" -DMELEE_DOL_PATH="$DOL" -DMELEE_PORT_GENERATED_DIR="$BUILD/generated/guest" \
+        -DMELEE_BUILD_PORT_TESTS=OFF -DMELEE_BUILD_PORT_HEADLESS=OFF -DMELEE_BUILD_PORT_METAL=ON >/dev/null
+      xcodebuild -project "$BUILD"/*.xcodeproj -target melee_port_mac -configuration Release -sdk iphoneos -allowProvisioningUpdates -quiet build
+      APP="$(find "$BUILD" -maxdepth 4 -name iSlippi.app -path '*Release-iphoneos*' | head -1)"
+      [[ -d "$APP" ]] || fail "the signed app did not appear under $BUILD"
+      # The Xcode generator writes CMake's post-build resources (Slippi Sys, the mark, the compiled icon) next to a
+      # literal 'Release${EFFECTIVE_PLATFORM_NAME}' folder; move them into the app and sign again with the same identity.
+      STRAY="$(dirname "$APP")/../Release\${EFFECTIVE_PLATFORM_NAME}/iSlippi.app"
+      if [[ -d "$STRAY" ]]; then cp -R "$STRAY"/. "$APP"/; else
+        cp -R "$ROOT/port/slippi_sys" "$APP/slippi_sys"; cp "$ROOT/port/app/icons/AppIcon.icon/Assets/glyph.png" "$APP/SlippiMark.png"; fi
+      IDENTITY="$(codesign -dvv "$APP" 2>&1 | sed -n 's/^Authority=\(Apple Development: [^,]*\)$/\1/p' | head -1)"
+      ENT="$(mktemp).plist"; codesign -d --entitlements - --xml "$APP" > "$ENT" 2>/dev/null
+      codesign --force --sign "$IDENTITY" --entitlements "$ENT" --timestamp=none "$APP"
+      codesign --verify --deep --strict "$APP" || fail "re-signing the app failed"
+      rm -rf "$ROOT/dist/ipa" && mkdir -p "$ROOT/dist/ipa/Payload" && cp -R "$APP" "$ROOT/dist/ipa/Payload/"
+      (cd "$ROOT/dist/ipa" && rm -f ../iSlippi-signed.ipa && zip -qry ../iSlippi-signed.ipa Payload) && rm -rf "$ROOT/dist/ipa"
+      step "Installing on your device"
+      if [[ -z "$UDID" ]]; then
+        UDID="$(xcrun devicectl list devices --json-output /dev/stdout 2>/dev/null | python3 -c "import sys,json
+d=json.load(sys.stdin)['result']['devices']
+ok=[x for x in d if x.get('connectionProperties',{}).get('tunnelState')=='connected' or x.get('deviceProperties',{}).get('bootState')=='booted']
+print((ok or d or [{}])[0].get('identifier',''))" 2>/dev/null)"
+      fi
+      if [[ -n "$UDID" ]] && xcrun devicectl device install app --device "$UDID" "$APP" >/dev/null 2>&1; then
+        echo "Installed on $UDID. First launch: Settings › General › VPN & Device Management › trust your developer certificate,"
+        echo "and Settings › Privacy & Security › Developer Mode must be on. Then copy your disc into the app's folder in Files."
+        xcrun devicectl device process launch --device "$UDID" "$BID" >/dev/null 2>&1 || true
+      else
+        echo "No connected device found (unlock it, plug it in over USB, and tap Trust). The signed app is at:"
+        echo "  $APP   and   $ROOT/dist/iSlippi-signed.ipa"
+        echo "Install it with: xcrun devicectl device install app --device <identifier> \"$APP\"   (identifiers: xcrun devicectl list devices)"
+        echo "or drag the IPA onto your device in Finder / Apple Configurator."
+      fi
+    fi
     ;;
   ios|visionos)
     if [[ "$TARGET" == "ios" ]]; then BUILD="$ROOT/build/ios-sim"; SYS=iOS; SDK=iphonesimulator; MIN=17.0; else BUILD="$ROOT/build/visionos-sim"; SYS=visionOS; SDK=xrsimulator; MIN=1.0; fi

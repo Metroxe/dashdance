@@ -11,7 +11,10 @@ build, and the rules that are not obvious from the code.
 ./setup.sh /path/to/melee.iso            # macOS app -> dist/iSlippi.app
 ./setup.sh /path/to/melee.iso --ios      # iPad/iPhone Simulator app (needs Xcode)
 ./setup.sh /path/to/melee.iso --visionos # Vision Pro Simulator app (needs Xcode)
+./setup.sh /path/to/melee.iso --device   # dist/iSlippi.ipa for AltStore/SideStore/Sideloadly; --team auto signs and installs over USB
 ```
+
+There is no store distribution and there must not be: the built app contains the translated game.
 
 The script installs Homebrew packages (cmake ninja python libusb), clones doldecomp/melee into
 `deps/melee`, extracts `main.dol` from the disc (`tools/extract_dol.py`), fetches the pinned Aurora

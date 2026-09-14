@@ -50,7 +50,8 @@ git clone https://github.com/TheAndersMadsen/islippi.git && cd islippi
 ./setup.sh /path/to/melee.iso
 ```
 
-Add `--ios` or `--visionos` (with Xcode installed) for the iPad, iPhone or Vision Pro Simulator app.
+Add `--ios` or `--visionos` (with Xcode installed) for the iPad, iPhone or Vision Pro Simulator app, or
+`--device` for an IPA you sideload onto your own iPhone or iPad (see below).
 Coding agents: read [CLAUDE.md](CLAUDE.md) first; it has the layout, the build rules that bite and the
 diagnostics.
 
@@ -105,6 +106,25 @@ The app follows Apple's current design language. On macOS 26 and iOS 26 the dash
 | Start | Return |
 
 Any controller SDL recognises works out of the box, over Bluetooth or a cable: PlayStation, Xbox, Switch Pro, MFi and most USB pads. On a Mac a WUP-028 GameCube adapter (the Nintendo Wii U / Switch one) is read directly over USB with the same 1 ms polling the real console uses and takes priority on the ports it has controllers plugged into. iPadOS and iOS do not expose raw USB devices to apps, so on those the adapter is not available; a Bluetooth or USB-C pad is the way to play with a physical controller there. Ports and button mappings are managed from the Controllers card on the dashboard.
+
+### iPhone and iPad (your own device)
+
+iSlippi cannot be on the App Store or an EU marketplace: the app contains the translated game code, which
+only you may have, from your own disc. It can be on your own device, and that is one command:
+
+```bash
+./setup.sh /path/to/melee.iso --device
+```
+
+That produces `dist/iSlippi.ipa`. Open it in [AltStore](https://altstore.io), [SideStore](https://sidestore.io)
+or [Sideloadly](https://sideloadly.io), sign in with your Apple ID, and it installs (a free Apple ID re-signs
+every 7 days; a paid developer account lasts a year). Copy your disc image into the app's folder in the Files
+app, or from Finder (your device › Files › iSlippi).
+
+Prefer USB and your own certificate? `./setup.sh /path/to/melee.iso --device --team auto` signs with the
+Apple Development identity Xcode created for your Apple ID and installs on the connected device
+(`--team <TEAMID>` to pick one; `--udid <id>` to pick the device). On the device turn on Settings › Privacy &
+Security › Developer Mode and trust your certificate under Settings › General › VPN & Device Management.
 
 ### On iPad, iPhone and Vision Pro
 
