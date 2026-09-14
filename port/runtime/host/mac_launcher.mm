@@ -278,8 +278,12 @@ API_AVAILABLE(macos(26.0))
 - (void)layout {
   [super layout];
   const CGFloat w = self.bounds.size.width, h = self.bounds.size.height;
+  // Melee's angled bar covers 70% of the card and always reaches past its title, so the words never run off the yellow.
+  CGFloat end = w * 0.7;
+  for (NSView* sub in self.subviews) if ([sub isKindOfClass:NSTextField.class]) end = MAX(end, NSMaxX(sub.frame) + 12 + h * 0.5);
+  end = MIN(end, w);
   CGMutablePathRef p = CGPathCreateMutable();
-  CGPathMoveToPoint(p, nil, 0, 0); CGPathAddLineToPoint(p, nil, w * 0.7, 0); CGPathAddLineToPoint(p, nil, w * 0.7 - 12, h); CGPathAddLineToPoint(p, nil, 0, h); CGPathCloseSubpath(p);
+  CGPathMoveToPoint(p, nil, 0, 0); CGPathAddLineToPoint(p, nil, end, 0); CGPathAddLineToPoint(p, nil, end - 12, h); CGPathAddLineToPoint(p, nil, 0, h); CGPathCloseSubpath(p);
   [CATransaction begin]; [CATransaction setDisableActions:YES]; _shape.path = p; [CATransaction commit];
   CGPathRelease(p);
 }
@@ -341,6 +345,57 @@ API_AVAILABLE(macos(26.0))
 }
 @end
 
+// QA aid (MELEE_TEXT_AUDIT=1): logs every label, button and picker whose text is cut off or sits outside the window.
+static void text_audit_view(NSView* v, NSWindow* w, const char* where, int& found) {
+  if (v.hidden || v.alphaValue < 0.01) return;
+  NSString* text = nil; BOOL clipped = NO;
+  const NSSize b = v.bounds.size;
+  if ([v isKindOfClass:NSTextField.class] && !((NSTextField*)v).editable) {
+    NSTextField* t = (NSTextField*)v; text = t.stringValue;
+    if (text.length && b.width > 1) {
+      if (t.cell.wraps) clipped = [t.cell cellSizeForBounds:NSMakeRect(0, 0, b.width, CGFLOAT_MAX)].height > b.height + 1.5;
+      else clipped = [t.cell cellSizeForBounds:NSMakeRect(0, 0, CGFLOAT_MAX, CGFLOAT_MAX)].width > b.width + 1.5;
+    }
+  } else if ([v isKindOfClass:NSButton.class] && ![v isKindOfClass:NSPopUpButton.class]) {
+    NSButton* bt = (NSButton*)v; text = bt.title;
+    if (text.length && b.width > 1) clipped = bt.intrinsicContentSize.width > b.width + 1.5;
+  } else if ([v isKindOfClass:NSSegmentedControl.class]) {
+    NSSegmentedControl* sc = (NSSegmentedControl*)v;
+    text = sc.segmentCount ? [sc labelForSegment:0] : nil;
+    if (b.width > 1) clipped = sc.intrinsicContentSize.width > b.width + 1.5;
+  }
+  if (text.length) {
+    const NSRect r = [v convertRect:v.bounds toView:nil];
+    const BOOL outside = NSMinX(r) < -1 || NSMaxX(r) > w.contentView.bounds.size.width + 1;
+    BOOL crowded = NO;
+    if ([v isKindOfClass:NSTextField.class]) {   // text running into the rounded ends of the capsule or box around it
+      for (NSView* a = v.superview; a && a != w.contentView; a = a.superview) {
+        CGFloat radius = a.layer.cornerRadius;
+        if ([a isKindOfClass:NSBox.class] && ((NSBox*)a).boxType == NSBoxCustom) radius = MAX(radius, ((NSBox*)a).cornerRadius);
+        if (radius <= 0) continue;
+        const CGFloat inset = MAX(4.0, MIN(radius, a.bounds.size.height / 2) * 0.5);
+        const NSRect safe = NSInsetRect([a convertRect:a.bounds toView:nil], inset, 0);
+        const CGFloat tw = MIN(b.width, [((NSTextField*)v).cell cellSizeForBounds:NSMakeRect(0, 0, CGFLOAT_MAX, CGFLOAT_MAX)].width);
+        const CGFloat tx = ((NSTextField*)v).alignment == NSTextAlignmentCenter ? NSMidX(r) - tw / 2 : NSMinX(r);
+        crowded = tx < NSMinX(safe) - 0.5 || tx + tw > NSMaxX(safe) + 0.5;
+        break;
+      }
+    }
+    if (clipped || outside || crowded) {
+      ++found;
+      fprintf(stderr, "text-audit [%s] %s%s%s \"%s\" box %.0fx%.0f x %.0f..%.0f\n", where, clipped ? "clipped" : "", outside ? " outside-window" : "", crowded ? " touches-its-shape" : "",
+              text.UTF8String, b.width, b.height, NSMinX(r), NSMaxX(r));
+    }
+  }
+  for (NSView* s in v.subviews) text_audit_view(s, w, where, found);
+}
+static void text_audit(NSWindow* w, const char* where) {
+  if (!w) return;
+  int found = 0;
+  [w.contentView layoutSubtreeIfNeeded];
+  text_audit_view(w.contentView, w, where, found);
+  fprintf(stderr, "text-audit [%s] done: %d problems, window %.0fx%.0f\n", where, found, w.contentView.bounds.size.width, w.contentView.bounds.size.height);
+}
 // Sheets need room: grow the dashboard window, within its screen, before attaching one that would not fit.
 static void fit_window_for_sheet(NSWindow* parent, NSSize sheet) {
   if (parent.styleMask & NSWindowStyleMaskFullScreen) return;
@@ -1486,6 +1541,11 @@ bool launcher_run(LauncherSettings& settings, const std::string& error) {
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [g_status.item.button performClick:nil]; });
     [launcher.window makeKeyAndOrderFront:nil];
     [launcher animateIn];
+    if (std::getenv("MELEE_TEXT_AUDIT"))   // QA aid: log text that does not fit, after the other aids have opened their sheets
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        text_audit(launcher.window, "dashboard");
+        if (NSWindow* sheet = launcher.window.attachedSheet) text_audit(sheet, "sheet");
+      });
     if (std::getenv("MELEE_OPEN_PAIRING"))   // screenshot aid: the Connect a Controller sheet
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [launcher connectController]; });
     if (const char* which = std::getenv("MELEE_OPEN_EDITOR")) {   // screenshot aid: "keyboard", or "pad:<guid>:<name>"

@@ -77,7 +77,9 @@ int display_max_hz() {
 #if TARGET_OS_VISION
   return 90;
 #else
-  return (int)UIScreen.mainScreen.maximumFramesPerSecond;
+  UIScreen* screen = nil;   // the screen the app's scene is on (iPhone Duo has two), not a global main screen
+  for (UIScene* s in UIApplication.sharedApplication.connectedScenes) if ([s isKindOfClass:UIWindowScene.class]) { screen = ((UIWindowScene*)s).screen; break; }
+  return (int)(screen ?: UIScreen.mainScreen).maximumFramesPerSecond;
 #endif
 }
 }  // namespace
@@ -197,6 +199,19 @@ int display_max_hz() {
 }
 @end
 
+// The width of the longest word in `text` at `font`: a wrapping label must never be narrower than this, or a word breaks
+// in half on a narrow phone ("Sharpe / n").
+static CGFloat longest_word_width(NSString* text, UIFont* font) {
+  CGFloat widest = 0;
+  for (NSString* word in [text componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet])
+    if (word.length) widest = MAX(widest, ceil([word sizeWithAttributes:@{NSFontAttributeName: font}].width));
+  return widest;
+}
+static void keep_words_whole(UILabel* l) {
+  const CGFloat w = longest_word_width(l.text ?: @"", l.font);
+  if (w > 0) { NSLayoutConstraint* c = [l.widthAnchor constraintGreaterThanOrEqualToConstant:w + 1]; c.priority = UILayoutPriorityRequired - 1; c.active = YES; }
+  [l setContentCompressionResistancePriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];
+}
 @interface MURemapController : UIViewController
 @property(nonatomic) host::ControllerConfig config;
 @property(nonatomic, copy) NSString* controllerName;
@@ -236,8 +251,12 @@ int display_max_hz() {
   UIStackView* row = [[UIStackView alloc] init]; row.axis = UILayoutConstraintAxisHorizontal; row.spacing = 12; row.alignment = UIStackViewAlignmentCenter;
   UILabel* l = [self text:name size:15 weight:UIFontWeightRegular alpha:1];
   [l setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+  keep_words_whole(l);
   [row addArrangedSubview:l]; [row addArrangedSubview:control];
-  if ([control isKindOfClass:UISlider.class]) [control.widthAnchor constraintEqualToConstant:170].active = YES;
+  if ([control isKindOfClass:UISlider.class]) {   // sliders shrink on narrow phones before any label does
+    NSLayoutConstraint* prefer = [control.widthAnchor constraintEqualToConstant:170]; prefer.priority = UILayoutPriorityDefaultLow; prefer.active = YES;
+    [control.widthAnchor constraintGreaterThanOrEqualToConstant:90].active = YES;
+  }
   if (value) {
     value.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium]; value.textColor = [UIColor colorWithWhite:1 alpha:0.75]; value.textAlignment = NSTextAlignmentRight;
     [value.widthAnchor constraintEqualToConstant:52].active = YES;
@@ -396,6 +415,53 @@ int display_max_hz() {
 }
 - (void)finish { [self dismissViewControllerAnimated:YES completion:nil]; }
 @end
+
+// QA aid (MELEE_TEXT_AUDIT=1): logs every piece of text that is cut off, needs more lines than its box has, or sits
+// outside the window, so layouts can be checked on every device and orientation without eyeballing screenshots.
+static void text_audit_view(UIView* v, UIWindow* w, const char* where, int& found) {
+  if (v.hidden || v.alpha < 0.01) return;
+  if ([v isKindOfClass:UILabel.class]) {
+    UILabel* l = (UILabel*)v;
+    NSAttributedString* text = l.attributedText;
+    const CGSize b = l.bounds.size;
+    if (text.length && b.width > 1 && b.height > 1) {
+      BOOL clipped;
+      UIFont* font = [text attribute:NSFontAttributeName atIndex:0 effectiveRange:nil] ?: l.font;
+      if (l.numberOfLines == 1) clipped = !l.adjustsFontSizeToFitWidth && [text boundingRectWithSize:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX) options:NSStringDrawingUsesLineFragmentOrigin context:nil].size.width > b.width + 1.5;
+      else clipped = [text boundingRectWithSize:CGSizeMake(b.width, CGFLOAT_MAX) options:NSStringDrawingUsesLineFragmentOrigin context:nil].size.height > b.height + 2.0;
+      const BOOL brokenWord = l.numberOfLines != 1 && longest_word_width(text.string, font) > b.width + 1.0;   // "Sharpe / n"
+      clipped = clipped || brokenWord;
+      const CGRect r = [l convertRect:l.bounds toView:nil];
+      const BOOL outside = CGRectGetMinX(r) < -1 || CGRectGetMaxX(r) > w.bounds.size.width + 1;
+      // Where the text actually sits inside the label, then whether it runs into the rounded ends or the edge of the nearest
+      // coloured or rounded shape around it (a badge, a capsule, a card).
+      const CGFloat tw = MIN(b.width, [text boundingRectWithSize:CGSizeMake(l.numberOfLines == 1 ? CGFLOAT_MAX : b.width, CGFLOAT_MAX) options:NSStringDrawingUsesLineFragmentOrigin context:nil].size.width);
+      const CGFloat tx = l.textAlignment == NSTextAlignmentCenter ? (b.width - tw) / 2 : l.textAlignment == NSTextAlignmentRight ? b.width - tw : 0;
+      CGRect textRect = [l convertRect:CGRectMake(tx, 0, tw, b.height) toView:nil];
+      BOOL crowded = NO;
+      for (UIView* a = l; a && a != w; a = a.superview) {
+        const BOOL shape = a.layer.cornerRadius > 0 || (a.backgroundColor && CGColorGetAlpha(a.backgroundColor.CGColor) > 0.05);
+        if (!shape) continue;
+        const CGFloat inset = MAX(4.0, MIN(a.layer.cornerRadius, a.bounds.size.height / 2) * 0.5);
+        const CGRect safe = CGRectInset([a convertRect:a.bounds toView:nil], inset, 0);
+        crowded = CGRectGetMinX(textRect) < CGRectGetMinX(safe) - 0.5 || CGRectGetMaxX(textRect) > CGRectGetMaxX(safe) + 0.5;
+        break;
+      }
+      if (clipped || outside || crowded) {
+        ++found;
+        fprintf(stderr, "text-audit [%s] %s%s%s \"%s\" box %.0fx%.0f x %.0f..%.0f\n", where, clipped ? "clipped" : "", outside ? " outside-window" : "", crowded ? " touches-its-shape" : "",
+                text.string.UTF8String, b.width, b.height, CGRectGetMinX(r), CGRectGetMaxX(r));
+      }
+    }
+  }
+  for (UIView* s in v.subviews) text_audit_view(s, w, where, found);
+}
+static void text_audit(UIWindow* w, const char* where) {
+  if (!w) return;
+  int found = 0;
+  text_audit_view(w, w, where, found);
+  fprintf(stderr, "text-audit [%s] done: %d problems, window %.0fx%.0f\n", where, found, w.bounds.size.width, w.bounds.size.height);
+}
 
 // "Connect a controller": pairing-mode steps per controller family, a shortcut to Settings, and a live confirmation the
 // moment a new controller shows up. Apple does not let apps pair Bluetooth controllers themselves.
@@ -616,7 +682,11 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   [content addSubview:self.stack];
   [NSLayoutConstraint activateConstraints:@[
     [self.scroll.topAnchor constraintEqualToAnchor:self.view.topAnchor], [self.scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-    [self.scroll.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor], [self.scroll.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
+    [self.scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor], [self.scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+    // Cards are centred on the display itself, not on the safe area, so two columns split evenly around iPhone Duo's fold
+    // even when system controls sit along one edge; they still never enter the safe-area insets.
+    [self.stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:20],
+    [self.stack.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-20],
     [self.stack.topAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.topAnchor constant:44], [self.stack.bottomAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.bottomAnchor constant:-48],
     [self.stack.centerXAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.centerXAnchor]]];
   self.maxWidth = [self.stack.widthAnchor constraintLessThanOrEqualToConstant:640]; self.maxWidth.active = YES;
@@ -684,6 +754,8 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
         [self.view.window.windowScene requestGeometryUpdateWithPreferences:[[UIWindowSceneGeometryPreferencesVision alloc] initWithSize:CGSizeMake(w, h)] errorHandler:nil];
     });
 #endif
+  if (std::getenv("MELEE_TEXT_AUDIT"))   // QA aid: log text that does not fit, after the other aids have opened their screens
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ text_audit(self.view.window, "ios"); });
   if (std::getenv("MELEE_OPEN_PAIRING"))   // screenshot aid: the Connect a Controller screen
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [self connectController]; });
   if (const char* which = std::getenv("MELEE_OPEN_EDITOR"))   // screenshot aid: "pad:<guid>:<name>" opens that controller's editor
@@ -778,7 +850,8 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   [super viewWillLayoutSubviews];
   // Wide screens (iPad in landscape, 13-inch iPads, Vision Pro windows) put the cards in two columns; phones and narrow
   // windows keep one readable column in the same order.
-  const BOOL wide = self.view.bounds.size.width >= 960;
+  // A regular-width environment with room for two readable columns: iPhone Duo open, iPads, large iPhones in landscape, Vision Pro windows.
+  const BOOL wide = self.traitCollection.horizontalSizeClass == UIUserInterfaceSizeClassRegular && self.view.bounds.size.width >= 800;
   if (self.cardColumns && (self.cardColumns.axis == UILayoutConstraintAxisHorizontal) != wide) {
     const BOOL atTop = self.scroll.contentOffset.y <= -self.scroll.adjustedContentInset.top + 1;   // a window resized while showing the top keeps showing the top
     if (atTop) dispatch_async(dispatch_get_main_queue(), ^{ [self.scroll setContentOffset:CGPointMake(0, -self.scroll.adjustedContentInset.top) animated:NO]; });
@@ -790,13 +863,26 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
 }
 - (void)viewDidLayoutSubviews {
   [super viewDidLayoutSubviews];
+  // Wrapping labels learn their real width after layout; without this a label nested in stacks keeps one line and ends in "…".
+  BOOL relayout = NO;
+  for (UIView* v in [self allSubviewsOf:self.stack]) {
+    if (![v isKindOfClass:UILabel.class]) continue;
+    UILabel* l = (UILabel*)v;
+    if (l.numberOfLines != 0 || l.bounds.size.width < 1 || fabs(l.preferredMaxLayoutWidth - l.bounds.size.width) < 0.5) continue;
+    l.preferredMaxLayoutWidth = l.bounds.size.width; relayout = YES;
+  }
+  if (relayout) [self.view setNeedsLayout];
   // angled header bars follow their width
   for (UIView* v in [self allSubviewsOf:self.stack]) {
     CAShapeLayer* shape = objc_getAssociatedObject(v, "shape");
     if (!shape) continue;
     const CGFloat w = v.bounds.size.width, h = v.bounds.size.height;
+    // Melee's angled bar covers 72% of the card, and always reaches past its title so the words never run off the yellow.
+    CGFloat end = w * 0.72;
+    for (UIView* sub in v.subviews) if ([sub isKindOfClass:UILabel.class]) end = MAX(end, CGRectGetMaxX(sub.frame) + 14 + h * 0.5);
+    end = MIN(end, w);
     UIBezierPath* p = [UIBezierPath bezierPath];
-    [p moveToPoint:CGPointMake(0, 0)]; [p addLineToPoint:CGPointMake(w * 0.72, 0)]; [p addLineToPoint:CGPointMake(w * 0.72 - 14, h)]; [p addLineToPoint:CGPointMake(0, h)]; [p closePath];
+    [p moveToPoint:CGPointMake(0, 0)]; [p addLineToPoint:CGPointMake(end, 0)]; [p addLineToPoint:CGPointMake(end - 14, h)]; [p addLineToPoint:CGPointMake(0, h)]; [p closePath];
     shape.path = p.CGPath;
   }
 }
@@ -816,7 +902,8 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   value.text = [NSString stringWithFormat:format, slider.value * scale];
   UIStackView* pair = [[UIStackView alloc] init]; pair.axis = UILayoutConstraintAxisHorizontal; pair.spacing = 8; pair.alignment = UIStackViewAlignmentCenter;
   [pair addArrangedSubview:slider]; [pair addArrangedSubview:value];
-  [slider.widthAnchor constraintEqualToConstant:150].active = YES;
+  NSLayoutConstraint* prefer = [slider.widthAnchor constraintEqualToConstant:150]; prefer.priority = UILayoutPriorityDefaultLow; prefer.active = YES;   // gives way on narrow phones
+  [slider.widthAnchor constraintGreaterThanOrEqualToConstant:90].active = YES;
   return [self row:text symbol:symbol control:pair];
 }
 - (UIView*)row:(NSString*)text symbol:(NSString*)symbol control:(UIView*)control {
@@ -829,9 +916,13 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   UILabel* l = [self label:text size:16 weight:UIFontWeightRegular alpha:1];
   [l setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
   [l setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];   // on a phone the label wraps; the switch keeps its size
+  keep_words_whole(l);                                                                                                // ...but only between words
   [control setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
   [row addArrangedSubview:icon]; [row addArrangedSubview:l]; [row addArrangedSubview:control];
-  if ([control isKindOfClass:UISlider.class]) [control.widthAnchor constraintEqualToConstant:170].active = YES;
+  if ([control isKindOfClass:UISlider.class]) {   // sliders shrink on narrow phones before any label does
+    NSLayoutConstraint* prefer = [control.widthAnchor constraintEqualToConstant:170]; prefer.priority = UILayoutPriorityDefaultLow; prefer.active = YES;
+    [control.widthAnchor constraintGreaterThanOrEqualToConstant:90].active = YES;
+  }
   return row;
 }
 // Buttons are glass on iOS 26 (prominent glass for Play, tinted Melee yellow); filled/gray otherwise.
@@ -896,17 +987,23 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   title.text = @"iSlippi"; title.font = meleeFont(52, UIFontWeightBlack); title.textColor = UIColor.whiteColor;
   title.layer.shadowColor = kYellow().CGColor; title.layer.shadowOpacity = 0.5; title.layer.shadowRadius = 14; title.layer.shadowOffset = CGSizeZero;
   UILabel* sub = [self label:@"SUPER SMASH BROS. MELEE  ·  SLIPPI ONLINE  ·  NATIVE" size:12 weight:UIFontWeightSemibold alpha:0.6];
+  // The player badge: a yellow capsule with real padding. Long names shrink the text slightly, then truncate, and the
+  // capsule never grows past the screen, so letters never run into its rounded ends.
+  UIView* chipWrap = [[UIView alloc] init];
+  chipWrap.backgroundColor = kYellow(); chipWrap.layer.cornerRadius = 16; chipWrap.layer.cornerCurve = kCACornerCurveContinuous;
   self.playerChip = [[UILabel alloc] init];
   self.playerChip.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold]; self.playerChip.textColor = rgb(0.1, 0.08, 0.02); self.playerChip.textAlignment = NSTextAlignmentCenter;
-  self.playerChip.backgroundColor = kYellow(); self.playerChip.layer.cornerRadius = 15; self.playerChip.clipsToBounds = YES;
-  [self.playerChip.heightAnchor constraintEqualToConstant:30].active = YES;
-  self.playerChip.hidden = YES;
-  UIView* chipWrap = [[UIView alloc] init];
+  self.playerChip.adjustsFontSizeToFitWidth = YES; self.playerChip.minimumScaleFactor = 0.8; self.playerChip.lineBreakMode = NSLineBreakByTruncatingMiddle;
   self.playerChip.translatesAutoresizingMaskIntoConstraints = NO;
   [chipWrap addSubview:self.playerChip];
-  [NSLayoutConstraint activateConstraints:@[[self.playerChip.topAnchor constraintEqualToAnchor:chipWrap.topAnchor], [self.playerChip.bottomAnchor constraintEqualToAnchor:chipWrap.bottomAnchor],
-                                            [self.playerChip.leadingAnchor constraintEqualToAnchor:chipWrap.leadingAnchor constant:-14], [self.playerChip.trailingAnchor constraintEqualToAnchor:chipWrap.trailingAnchor constant:14]]];
+  [NSLayoutConstraint activateConstraints:@[[chipWrap.heightAnchor constraintEqualToConstant:32],
+                                            [self.playerChip.centerYAnchor constraintEqualToAnchor:chipWrap.centerYAnchor],
+                                            [self.playerChip.leadingAnchor constraintEqualToAnchor:chipWrap.leadingAnchor constant:18], [self.playerChip.trailingAnchor constraintEqualToAnchor:chipWrap.trailingAnchor constant:-18]]];
+  [chipWrap.widthAnchor constraintLessThanOrEqualToConstant:600].active = YES;
+  chipWrap.hidden = YES;
+  objc_setAssociatedObject(self.playerChip, "badge", chipWrap, OBJC_ASSOCIATION_ASSIGN);
   [hero addArrangedSubview:title]; [hero addArrangedSubview:sub]; [hero addArrangedSubview:chipWrap];
+  [chipWrap.widthAnchor constraintLessThanOrEqualToAnchor:hero.widthAnchor].active = YES;   // a long name shrinks or truncates inside the capsule instead of widening it
   [hero setCustomSpacing:14 afterView:sub];
   return hero;
 }
@@ -1030,7 +1127,8 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   [s addArrangedSubview:[self row:@"Slippi Online services" symbol:@"network" control:self.onlineSwitch]];
   UIButton* preset = [self button:@"Competitive preset" symbol:@"bolt.fill" prominent:NO];
   [preset addTarget:self action:@selector(applyCompetitivePreset) forControlEvents:UIControlEventTouchUpInside];
-  UIStackView* presetRow = [[UIStackView alloc] init]; presetRow.axis = UILayoutConstraintAxisHorizontal; presetRow.spacing = 12; presetRow.alignment = UIStackViewAlignmentCenter;
+  // Button on its own line with its explanation underneath: the title never hyphenates on a narrow phone.
+  UIStackView* presetRow = [[UIStackView alloc] init]; presetRow.axis = UILayoutConstraintAxisVertical; presetRow.spacing = 6; presetRow.alignment = UIStackViewAlignmentLeading;
   [presetRow addArrangedSubview:preset]; [presetRow addArrangedSubview:[self label:@"2× resolution (lowest latency that still looks crisp), 16× filtering, display sync on, 4:3, no sharpening." size:12 weight:UIFontWeightRegular alpha:0.6]];
   [s addArrangedSubview:presetRow];
   return card;
@@ -1097,11 +1195,11 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
     if (_dashboard.name.empty()) { _dashboard.name = account.display_name; _dashboard.code = account.connect_code; }
     self.accountLabel.text = [NSString stringWithFormat:@"Signed in as %s  (%s). Ranked stats and your connect code stay saved on this device.", account.display_name.c_str(), account.connect_code.c_str()];
     self.playerChip.text = [NSString stringWithFormat:@"%s  %s", account.display_name.c_str(), account.connect_code.c_str()];
-    self.playerChip.hidden = NO;
+    ((UIView*)objc_getAssociatedObject(self.playerChip, "badge")).hidden = NO;
   } else {
     self.settings->account_name.clear(); self.settings->account_code.clear();
     self.accountLabel.text = @"Sign in with your Slippi account to play online and see your ranked stats. Offline play works without it.";
-    self.playerChip.hidden = YES;
+    ((UIView*)objc_getAssociatedObject(self.playerChip, "badge")).hidden = YES;
   }
   self.signInRows.hidden = signed_in; self.signOutButton.hidden = !signed_in;
   self.rankedCard.hidden = !signed_in;
@@ -1130,8 +1228,15 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   for (const host::GameRow& r : rows) {
     UIStackView* row = [[UIStackView alloc] init]; row.axis = UILayoutConstraintAxisHorizontal; row.spacing = 10; row.alignment = UIStackViewAlignmentCenter;
     UIStackView* text = [[UIStackView alloc] init]; text.axis = UILayoutConstraintAxisVertical; text.spacing = 2;
-    [text addArrangedSubview:[self label:ns(r.title) size:15 weight:UIFontWeightSemibold alpha:1]];
-    [text addArrangedSubview:[self label:ns(r.subtitle) size:12 weight:UIFontWeightRegular alpha:0.6]];
+    // Long names wrap onto a second line instead of ending in "…": the labels may grow taller, never get cut.
+    UILabel* title = [self label:ns(r.title) size:15 weight:UIFontWeightSemibold alpha:1];
+    UILabel* subtitle = [self label:ns(r.subtitle) size:12 weight:UIFontWeightRegular alpha:0.6];
+    for (UILabel* l in @[title, subtitle]) {
+      l.lineBreakMode = NSLineBreakByWordWrapping;
+      [l setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
+      [text addArrangedSubview:l];
+    }
+    [text setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
     UILabel* result = [[UILabel alloc] init];
     result.text = ns(r.result); result.font = meleeFont(14, UIFontWeightBold); result.textAlignment = NSTextAlignmentCenter;
     result.textColor = r.win ? rgb(0.30, 0.85, 0.45) : r.loss ? kRed() : [UIColor colorWithWhite:1 alpha:0.6];
@@ -1180,8 +1285,14 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
       rm.modalPresentationStyle = UIModalPresentationFormSheet;
       [self presentViewController:rm animated:YES completion:nil]; }]];
     [row addArrangedSubview:icon]; [row addArrangedSubview:text];
-    if (!pad.is_gamecube_adapter) { [row addArrangedSubview:portButton]; [row addArrangedSubview:remap]; }
-    [self.controllersStack addArrangedSubview:row];
+    // Name and rate on top, the port and Configure buttons sharing the width below: nothing is squeezed on a phone.
+    UIStackView* entry = [[UIStackView alloc] initWithArrangedSubviews:@[row]]; entry.axis = UILayoutConstraintAxisVertical; entry.spacing = 8;
+    if (!pad.is_gamecube_adapter) {
+      UIStackView* actions = [[UIStackView alloc] initWithArrangedSubviews:@[portButton, remap]];
+      actions.axis = UILayoutConstraintAxisHorizontal; actions.spacing = 10; actions.distribution = UIStackViewDistributionFillEqually;
+      [entry addArrangedSubview:actions];
+    }
+    [self.controllersStack addArrangedSubview:entry];
   }
   [self refreshSteps];
 }

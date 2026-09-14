@@ -18,6 +18,13 @@ void window_set_fullscreen(bool enabled);
 float window_safe_top_pixels();
 // All four safe-area insets in pixels (island, notch, rounded corners, home indicator); zeros on the Mac.
 void window_safe_insets(float& top, float& left, float& right, float& bottom);
+float window_pixels_per_point();
+// Where the game's picture goes in a ww x wh pixel window. Held upright it sits under the Dynamic Island and never
+// reaches past the middle of the screen, so on iPhone Duo's inner display the fold falls between the game and the
+// touch controls; otherwise it is centred at full height. The same rectangle drives the renderer, the touch layout and
+// the artwork drawn in the letterbox.
+struct GameRect { float x, y, w, h; };
+GameRect window_game_rect(float ww, float wh, float aspect);
 void window_gamepad_rumble(int port, bool on);   // SDL gamepad on that GameCube port, if any
 bool window_take_fullscreen_toggle();   // true once per Alt+Enter press in the game window
 double window_refresh_rate();

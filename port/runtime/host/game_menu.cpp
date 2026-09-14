@@ -381,7 +381,7 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
   std::lock_guard<std::mutex> lock(g_mutex);
   g_touch_visible = touch_controls_visible;
   const RuntimeSettings s = g_settings;
-  const float unit = std::clamp(std::min(ww, wh) / 30.0f, 12.0f, 40.0f);   // line height that suits the window, portrait or landscape
+  const float unit = std::min(18.0f * std::max(window_pixels_per_point(), 1.0f), std::min(ww, wh) / 22.0f);   // 18 pt lines on every display, smaller only when the window is tiny
   float safe_t = 0, safe_l = 0, safe_r = 0, safe_b = 0;
   window_safe_insets(safe_t, safe_l, safe_r, safe_b);   // keep clear of the island, the rounded corners and the home indicator
   // Performance HUD: one line, top-left.
@@ -393,14 +393,14 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     const float h = unit * 0.7f, pad = h * 0.4f, w = h * 0.55f * (float)std::strlen(line) + pad * 2;
     const float hx = pad + safe_l, hy = pad + safe_t;
     out.shapes.push_back({hx, hy, hx + w, hy + h + pad * 1.5f, 0.0f, 0.0f, 0.0f, 0.55f, h * 0.35f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
-    out.texts.push_back({hx + pad, hy + pad * 0.6f, h, 1, 1, 1, 0.92f, 0, line});
+    out.texts.push_back({hx + pad, hy + pad * 0.6f, h, 1, 1, 1, 0.92f, 0, line, (float)ww - safe_l - safe_r - 4 * pad});
   }
   if (!g_open.load()) {
     if (touch_controls_visible) {   // MENU button, top-right
       const float h = unit * 1.1f, w = h * 2.6f, m = unit * 0.5f;
       g_menu_button[0] = ww - m - safe_r - w; g_menu_button[1] = m + safe_t; g_menu_button[2] = ww - m - safe_r; g_menu_button[3] = m + safe_t + h;
       out.shapes.push_back({g_menu_button[0], g_menu_button[1], g_menu_button[2], g_menu_button[3], 1, 1, 1, 0.18f, h * 0.5f, 2.0f, 0.0f, 0, 0.0f, 0.0f});
-      out.texts.push_back({g_menu_button[0] + w * 0.5f, g_menu_button[1] + h * 0.22f, h * 0.56f, 1, 1, 1, 0.9f, 1, "MENU"});
+      out.texts.push_back({g_menu_button[0] + w * 0.5f, g_menu_button[1] + h * 0.22f, h * 0.56f, 1, 1, 1, 0.9f, 1, "MENU", w * 0.82f});
     }
     return;
   }
@@ -418,7 +418,7 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
   // Title bar in Melee's angled yellow.
   const std::string title = g_page == Page::Main ? "iSLIPPI  SETTINGS" : g_page == Page::Controls ? "CONTROLS" : "REMAP  " + upper(device() ? device()->name : "");
   out.shapes.push_back({x0 + pad, y0 + pad, x0 + pad + panel_w * 0.62f, y0 + pad + title_h, 0.97f, 0.79f, 0.28f, 1.0f, unit * 0.15f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
-  out.texts.push_back({x0 + pad + unit * 0.5f, y0 + pad + title_h * 0.12f, title_h * 0.75f, 0.10f, 0.08f, 0.02f, 1.0f, 0, title.substr(0, 28)});
+  out.texts.push_back({x0 + pad + unit * 0.5f, y0 + pad + title_h * 0.12f, title_h * 0.75f, 0.10f, 0.08f, 0.02f, 1.0f, 0, title, panel_w * 0.62f - unit * 1.2f});
   const float top = y0 + pad + title_h + unit * 0.5f;
   const float cx = (x0 + x1) * 0.5f;
 
@@ -426,17 +426,17 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     const int n = step_count(), step = std::min(g_step, n - 1);
     char line[96];
     std::snprintf(line, sizeof line, "Step %d of %d", step + 1, n);
-    out.texts.push_back({cx, top + unit * 0.2f, unit * 0.8f, 1, 1, 1, 0.6f, 1, line});
-    out.texts.push_back({cx, top + unit * 1.7f, unit * 1.05f, 1, 1, 1, 0.9f, 1, is_keyboard(device()) ? "Press the key for" : "Press the button for"});
-    out.texts.push_back({cx, top + unit * 3.1f, unit * 2.3f, 0.97f, 0.79f, 0.28f, 1.0f, 1, step_name(step)});
-    out.texts.push_back({cx, top + unit * 6.2f, unit * 0.9f, 1, 1, 1, 0.7f, 1, "Now: " + ascii(step_binding(step))});
+    out.texts.push_back({cx, top + unit * 0.2f, unit * 0.8f, 1, 1, 1, 0.6f, 1, line, panel_w - 2 * pad});
+    out.texts.push_back({cx, top + unit * 1.7f, unit * 1.05f, 1, 1, 1, 0.9f, 1, is_keyboard(device()) ? "Press the key for" : "Press the button for", panel_w - 2 * pad});
+    out.texts.push_back({cx, top + unit * 3.1f, unit * 2.3f, 0.97f, 0.79f, 0.28f, 1.0f, 1, step_name(step), panel_w - 2 * pad});
+    out.texts.push_back({cx, top + unit * 6.2f, unit * 0.9f, 1, 1, 1, 0.7f, 1, "Now: " + ascii(step_binding(step)), panel_w - 2 * pad});
     const float bar_w = panel_w - 4 * pad, remaining = 1.0f - std::min(1.0f, g_step_frames / (float)kSkipFrames);
     out.shapes.push_back({cx - bar_w / 2, top + unit * 7.8f, cx + bar_w / 2, top + unit * 8.2f, 1, 1, 1, 0.12f, unit * 0.2f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
     out.shapes.push_back({cx - bar_w / 2, top + unit * 7.8f, cx - bar_w / 2 + bar_w * remaining, top + unit * 8.2f, 0.97f, 0.79f, 0.28f, 0.9f, unit * 0.2f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
     std::snprintf(line, sizeof line, "Keeps the current binding in %d s", (int)std::ceil((kSkipFrames - g_step_frames) / 60.0f));
-    out.texts.push_back({cx, top + unit * 8.7f, unit * 0.8f, 1, 1, 1, 0.55f, 1, line});
+    out.texts.push_back({cx, top + unit * 8.7f, unit * 0.8f, 1, 1, 1, 0.55f, 1, line, panel_w - 2 * pad});
     out.texts.push_back({cx, y1 - pad - unit * 1.1f, unit * 0.7f, 1, 1, 1, 0.55f, 1,
-                         touch_controls_visible ? "Tap anywhere to stop." : is_keyboard(device()) ? "Escape stops the remap." : "Hold L+R+Start to close the menu."});
+                         touch_controls_visible ? "Tap anywhere to stop." : is_keyboard(device()) ? "Escape stops the remap." : "Hold L+R+Start to close the menu.", panel_w - 2 * pad});
     g_layout = {x0, y0, x1, y1, row_h, top};
     return;
   }
@@ -448,15 +448,15 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     if (sel) out.shapes.push_back({x0 + pad * 0.5f, ry, x1 - pad * 0.5f, ry + row_h, 0.97f, 0.79f, 0.28f, 0.18f, unit * 0.35f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
     const float ty = ry + (row_h - unit) * 0.5f;
     const bool main = g_page == Page::Main;
-    out.texts.push_back({x0 + pad, ty, unit * 0.95f, 1, 1, 1, sel ? 1.0f : 0.85f, 0, main ? main_name(r) : controls_name(r)});
     const std::string value = main ? main_value(r, s) : controls_value(r);
+    out.texts.push_back({x0 + pad, ty, unit * 0.95f, 1, 1, 1, sel ? 1.0f : 0.85f, 0, main ? main_name(r) : controls_name(r), value.empty() ? panel_w - 2 * pad : panel_w * 0.56f - pad});
     const bool steppable = main ? (r != ROW_RESUME && r != ROW_CONTROLS) : value_row(r);
-    if (!value.empty()) out.texts.push_back({x1 - pad, ty, unit * 0.95f, 0.97f, 0.79f, 0.28f, sel ? 1.0f : 0.8f, 2, sel && steppable ? "<  " + value + "  >" : value});
+    if (!value.empty()) out.texts.push_back({x1 - pad, ty, unit * 0.95f, 0.97f, 0.79f, 0.28f, sel ? 1.0f : 0.8f, 2, sel && steppable ? "<  " + value + "  >" : value, panel_w * 0.42f - pad});
   }
   const char* hint = touch_controls_visible ? "Tap a row: left side lowers, right side raises.  Tap outside to go back."
                    : g_page == Page::Main ? "Up/Down select   Left/Right change   A adjust   B or Start resume   (L+R+Start or F1 opens)"
                                           : "Up/Down select   Left/Right change   A choose   B back";
-  out.texts.push_back({cx, y1 - pad - unit * 1.1f, unit * 0.7f, 1, 1, 1, 0.55f, 1, hint});
+  out.texts.push_back({cx, y1 - pad - unit * 1.1f, unit * 0.7f, 1, 1, 1, 0.55f, 1, hint, panel_w - 2 * pad});
   g_layout = {x0, y0, x1, y1, row_h, top};
 }
 }  // namespace host

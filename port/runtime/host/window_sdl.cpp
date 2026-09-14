@@ -95,15 +95,17 @@ void touch_layout() {
   // Portrait (iPhone, iPad held upright): the game sits at the top, the controls fill the rest.
   const bool portrait = H_full > W * 1.05f;
   const float safe_l = g_safe_left.load(), safe_r = g_safe_right.load(), safe_b = g_safe_bottom.load();
-  const float top = portrait ? g_safe_top.load() + W / g_touch_aspect : g_safe_top.load();   // below the island and the game
+  const GameRect game = window_game_rect(W, H_full, g_touch_aspect);
+  const float top = portrait ? game.y + game.h : g_safe_top.load();   // below the island and the game
   const float H = std::max(H_full - top - safe_b, 120.0f);                                   // above the home indicator
-  const float col_h = H - 2 * pad;
-  const float col_w = (portrait ? std::min(W * 0.42f, 320.0f * t.pt) : std::min(std::max(200.0f * t.pt, H * 0.36f), W * 0.28f)) * g_touch_scale;
+  const float col_h = std::min(H - 2 * pad, 440.0f * t.pt);   // same size on every display (iPhone Duo outer and inner), sitting low within thumb reach
+  const float y_base = top + (H - 2 * pad - col_h);
+  const float col_w = (portrait ? std::min(W * 0.42f, 260.0f * t.pt) : std::min(std::max(200.0f * t.pt, col_h * 0.46f), W * 0.28f)) * g_touch_scale;
   const float trig_h = col_h * 0.13f, mid = std::min(col_w, col_h * 0.60f), row_h = col_h * 0.27f;
   const float gap = 16.0f * t.pt, btn_d = std::max(std::min(row_h, col_w * 0.42f), 8.0f);
   auto column = [&](float x0, bool left) {
     const float cx = x0 + col_w * 0.5f;
-    const float y_trig = top + pad, y_mid = y_trig + trig_h + gap, y_row = y_trig + trig_h + col_h * 0.60f + (row_h - btn_d) * 0.5f;
+    const float y_trig = y_base + pad, y_mid = y_trig + trig_h + gap, y_row = y_trig + trig_h + col_h * 0.60f + (row_h - btn_d) * 0.5f;
     const float mid_d = std::max(mid - 2 * gap, 24.0f);
     if (left) {
       t.buttons.push_back({GC_L, true, false, LB_L, {x0, y_trig, x0 + col_w, y_trig + trig_h}, true, false});
@@ -444,6 +446,20 @@ void window_pump() {
 }
 
 float window_safe_top_pixels() { return g_safe_top.load(); }
+float window_pixels_per_point() { return g_pixels_per_point; }
+GameRect window_game_rect(float ww, float wh, float aspect) {
+  aspect = aspect > 0.0f ? aspect : 4.0f / 3.0f;
+  const float st = g_safe_top.load(), sb = g_safe_bottom.load();
+  if (wh > ww * 1.05f) {   // upright
+    float w = ww, h = ww / aspect;
+    const float cap = std::max(wh * 0.5f - st, wh * 0.25f);   // keep the fold (and room for controls) below the game
+    if (h > cap) { h = cap; w = h * aspect; }
+    return {(ww - w) * 0.5f, std::min(st, std::max(0.0f, wh - sb - h)), w, h};
+  }
+  float h = wh, w = wh * aspect;
+  if (w > ww) { w = ww; h = ww / aspect; }
+  return {(ww - w) * 0.5f, (wh - h) * 0.5f, w, h};
+}
 void window_safe_insets(float& top, float& left, float& right, float& bottom) { top = g_safe_top.load(); left = g_safe_left.load(); right = g_safe_right.load(); bottom = g_safe_bottom.load(); }
 void window_set_fullscreen(bool enabled) { if (g_window) SDL_SetWindowFullscreen(g_window, enabled); }
 
@@ -591,15 +607,45 @@ void input_poll(PadState out[4]) {
   if (!(adapter_mask & 1u)) { out[0].err = 0; read_keyboard(out[0]); read_touch(out[0]); }
 }
 
+// The letterbox is never bare black: Melee's menu grid continues around the picture, faintly, the way Apple asks games to
+// fill the padding when the picture cannot change its aspect ratio (iPhone Duo, iPad, a Mac display that is not 4:3).
+void letterbox_artwork(std::vector<OverlayShape>& out, int ww, int wh) {
+  const GameRect g = window_game_rect((float)ww, (float)wh, g_touch_aspect);
+  const float pt = std::max(g_pixels_per_point, 1.0f), step = 44.0f * pt, line = std::max(1.0f, pt * 0.75f);
+  const float gx0 = std::floor(g.x), gy0 = std::floor(g.y), gx1 = std::ceil(g.x + g.w), gy1 = std::ceil(g.y + g.h);
+  if (gx0 < 2 && gy0 < 2 && gx1 > ww - 2 && gy1 > wh - 2) return;   // the picture fills the window
+  auto add = [&](float x0, float y0, float x1, float y1, float a) {
+    // Clip each line against the picture so the artwork only ever sits in the padding.
+    if (x1 <= gx0 || x0 >= gx1 || y1 <= gy0 || y0 >= gy1) { out.push_back({x0, y0, x1, y1, 0.55f, 0.62f, 1.0f, a, 0.0f, 0.0f, 0.0f, 0, 0.0f, 0.0f}); return; }
+    if (x1 - x0 > y1 - y0) {   // horizontal line crossing the picture: keep the parts left and right of it
+      if (x0 < gx0) out.push_back({x0, y0, gx0, y1, 0.55f, 0.62f, 1.0f, a, 0.0f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+      if (x1 > gx1) out.push_back({gx1, y0, x1, y1, 0.55f, 0.62f, 1.0f, a, 0.0f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+    } else {
+      if (y0 < gy0) out.push_back({x0, y0, x1, gy0, 0.55f, 0.62f, 1.0f, a, 0.0f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+      if (y1 > gy1) out.push_back({x0, gy1, x1, y1, 0.55f, 0.62f, 1.0f, a, 0.0f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+    }
+  };
+  const float cx = ww * 0.5f, cy = wh * 0.5f;   // grid centred on the display, so it is symmetric about iPhone Duo's fold
+  for (float x = std::fmod(cx, step); x < ww; x += step) add(x - line * 0.5f, 0, x + line * 0.5f, (float)wh, 0.07f);
+  for (float y = std::fmod(cy, step); y < wh; y += step) add(0, y - line * 0.5f, (float)ww, y + line * 0.5f, 0.07f);
+  // A thin yellow keyline where the picture meets the padding, like the frame around Melee's menus.
+  const float k = std::max(1.0f, pt);
+  if (gy1 < wh - 2) add(gx0, gy1, gx1, gy1 + k, 0.35f);
+  if (gy0 > 2) add(gx0, gy0 - k, gx1, gy0, 0.35f);
+  if (gx0 > 2) add(gx0 - k, gy0, gx0, gy1, 0.35f);
+  if (gx1 < ww - 2) add(gx1, gy0, gx1 + k, gy1, 0.35f);
+  for (size_t i = out.size() >= 4 ? out.size() - 4 : 0; i < out.size(); ++i) if (out[i].a > 0.3f) { out[i].r = 0.97f; out[i].g = 0.79f; out[i].b = 0.28f; }
+}
 bool game_overlay(OverlayFrame& out) {
   out.texts.clear();
   const bool touch = touch_overlay(out);   // clears shapes, sets alpha to the touch fade
-  const float touch_alpha = out.alpha;
+  for (OverlayShape& s : out.shapes) s.a *= out.alpha;   // bake the touch fade: artwork, menu and HUD are drawn at full opacity
+  out.alpha = 1.0f;
   int w = 0, h = 0; window_client_size(&w, &h);
-  const size_t touch_shapes = out.shapes.size();
+  std::vector<OverlayShape> art;
+  { std::lock_guard<std::mutex> lock(g_touch_mutex); letterbox_artwork(art, w, h); }
+  out.shapes.insert(out.shapes.begin(), art.begin(), art.end());   // under the touch controls
   menu_overlay(out, w, h, touch);
-  // The touch controls fade with `alpha`; menu and HUD shapes are always fully opaque: bake the fade into the touch shapes instead.
-  if (out.shapes.size() > touch_shapes || !out.texts.empty()) { for (size_t i = 0; i < touch_shapes; ++i) out.shapes[i].a *= touch_alpha; out.alpha = 1.0f; }
   return !out.shapes.empty() || !out.texts.empty();
 }
 }  // namespace host

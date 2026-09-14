@@ -24,6 +24,7 @@ struct OverlayText {
   float r, g, b, a;
   int align;              // 0 left, 1 centre, 2 right (about x)
   std::string text;
+  float max_w = 0.0f;     // > 0: the line shrinks to fit this width instead of running past its box
 };
 struct OverlayFrame {
   std::vector<OverlayShape> shapes;

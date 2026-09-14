@@ -7,6 +7,9 @@ build, and the rules that are not obvious from the code.
 
 ## One-command setup
 
+Players use `install.sh` (the one line in the README): it clones into ~/iSlippi, asks for the disc, runs `setup.sh`, copies the app to
+Applications and opens it. Developers call `setup.sh` directly:
+
 ```bash
 ./setup.sh /path/to/melee.iso            # macOS app -> dist/iSlippi.app
 ./setup.sh /path/to/melee.iso --ios      # iPad/iPhone Simulator app (needs Xcode)
@@ -67,7 +70,7 @@ committed; the disc stays where it is.
   background shader compilation off for A/B tests.
 - `MELEE_DASHBOARD_SAMPLE=1` fills the dashboard with sample data; `MELEE_LAUNCHER_SCROLL=<pt>` starts
   it scrolled; `MELEE_MARK=<glyph.png>` shows the Slippi mark when running the bare binary.
-- `MELEE_OPEN_EDITOR=keyboard` (or `pad:<guid>:<name>`) opens the dashboard's controller editor after launch (iOS takes `pad:` only); `MELEE_CONTROLLER_ART=<dir>` loads the controller artwork from another folder; `MELEE_OPEN_PAIRING=1` opens Connect a Controller; `MELEE_ORIENTATION=portrait|landscape` rotates the iPhone/iPad dashboard (the game follows the device: rotate the Simulator with Command-arrow), `MELEE_WINDOW_SIZE=WxH` sizes the Vision Pro window and `MELEE_LAUNCHER_SIZE=WxH` the Mac dashboard window;
+- `MELEE_OPEN_EDITOR=keyboard` (or `pad:<guid>:<name>`) opens the dashboard's controller editor after launch (iOS takes `pad:` only); `MELEE_CONTROLLER_ART=<dir>` loads the controller artwork from another folder; `MELEE_OPEN_PAIRING=1` opens Connect a Controller; `MELEE_TEXT_AUDIT=1` logs every label, button or picker whose text is cut off, needs more lines than its box, leaves the window or runs into the rounded shape around it (`text-audit [...] done: N problems`; run it on each device and orientation after UI changes, and look at the screenshots too); `MELEE_ORIENTATION=portrait|landscape` rotates the iPhone/iPad dashboard (the game follows the device: rotate the Simulator with Command-arrow), `MELEE_WINDOW_SIZE=WxH` sizes the Vision Pro window and `MELEE_LAUNCHER_SIZE=WxH` the Mac dashboard window;
   `MELEE_MENU_PAGE=controls` or `remap` opens that page of the in-game menu together with `MELEE_MENU_OPEN` (screenshots).
 - `MELEE_MENU_OPEN=<retrace>` opens the in-game menu at that frame and `MELEE_HUD=1` turns the HUD on (screenshots);
   `MELEE_DUMP_GLYPHS=<file.pgm>` writes the text atlas; `MELEE_DISCORD_APP_ID=<id>` points Discord presence at another application (the built-in id,
@@ -86,6 +89,7 @@ committed; the disc stays where it is.
 - Colours and glass tints come from the small theme helpers at the top of each launcher file; do not
   scatter literal colours.
 - Keep the simulation thread free of anything that can block (display, GPU, disk, shader compiles).
+- iPhone Duo (see docs/TECHNICAL.md): one game rectangle (`host::window_game_rect`) for renderer, touch layout and letterbox artwork; upright, the game never passes the middle of the display (the fold); controls and overlay text are sized in points; dashboard columns switch on size class and centre on the display; no global main screen; `UIRequiresFullScreen` stays off. The README is written for players; put technical material in docs/TECHNICAL.md.
 - Every screen adapts: two columns of cards when the window is wide (Mac from 1100 pt, iPad and Vision Pro from 960 pt), a side-by-side controller editor in landscape, and touch controls, HUD and menu inside the safe area. Check portrait and landscape on iPhone and iPad and a narrow and wide window on Mac and Vision Pro with the aids above.
 
 ## Verification checklist for a change

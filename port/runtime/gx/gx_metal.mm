@@ -811,11 +811,9 @@ class MetalBackend final : public Backend {
     id<MTLRenderCommandEncoder> enc = [command_ renderCommandEncoderWithDescriptor:rp];
     const float ww = (float)drawable.texture.width, wh = (float)drawable.texture.height;
     const float aspect = output_aspect();
-    float vw = ww, vh = ww / aspect;
-    if (vh > wh) { vh = wh; vw = wh * aspect; }
-    const bool portrait = wh > ww * 1.05f;   // touch devices held upright: game on top, controls below
-    const double top = portrait ? std::min((double)host::window_safe_top_pixels(), std::max(0.0, (double)(wh - vh))) : (wh - vh) * 0.5;   // upright: just below the Dynamic Island
-    [enc setViewport:MTLViewport{(ww - vw) * 0.5, top, vw, vh, 0, 1}];
+    const host::GameRect gr = host::window_game_rect(ww, wh, aspect);   // shared with the touch layout and the letterbox artwork
+    const float vw = gr.w, vh = gr.h;
+    [enc setViewport:MTLViewport{gr.x, gr.y, vw, vh, 0, 1}];
     BlitConstants bc{{(float)c.src_w / EFB_WIDTH, (float)c.src_h / EFB_HEIGHT, (float)c.src_x / EFB_WIDTH, (float)c.src_y / EFB_HEIGHT},
                      {1.0f / std::max((float)efb_w_, 1.0f), 1.0f / std::max((float)efb_h_, 1.0f), std::clamp(opts_.sharpness, 0.0f, 1.0f), 0.0f},
                      {1, 1, 0, 0}};
@@ -932,10 +930,12 @@ class MetalBackend final : public Backend {
     struct TxGlyphCpu { float rect[4]; float uv[4]; float color[4]; };
     std::vector<TxGlyphCpu> quads;
     for (const host::OverlayText& t : overlay_frame_.texts) {
-      const float k = t.size / glyph_font_px_;
+      float size = t.size;
+      if (t.max_w > 0.0f) { const float w = text_width(t.text, t.size); if (w > t.max_w) size = t.size * t.max_w / w; }   // fit, don't overflow
+      const float k = size / glyph_font_px_;
       float x = t.x;
-      if (t.align) { const float w = text_width(t.text, t.size); x -= t.align == 1 ? w * 0.5f : w; }
-      const float baseline = t.y + glyph_ascent_ * k;
+      if (t.align) { const float w = text_width(t.text, size); x -= t.align == 1 ? w * 0.5f : w; }
+      const float baseline = t.y + (t.size - size) * 0.5f + glyph_ascent_ * k;
       for (unsigned char c : t.text) {
         if (c < 32 || c >= 127) continue;
         const Glyph& g = glyphs_[c - 32];

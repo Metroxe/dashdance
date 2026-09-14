@@ -38,6 +38,13 @@ if [[ "$TARGET" == "mac" ]]; then
 else
   [[ -d /Applications/Xcode.app ]] || fail "the iPad and Vision Pro builds need the full Xcode from the App Store."
   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+  if [[ "$TARGET" == "ios" || "$TARGET" == "device" ]]; then
+    SDK="$(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null || echo 0)"
+    if [[ "$(printf '%s\n27.1\n' "$SDK" | sort -V | head -1)" != "27.1" ]]; then
+      printf '\033[1;33mnote:\033[0m this Xcode has the iOS %s SDK. On iPhone Duo, apps built before the iOS 27.1 SDK run at a smaller,\n' "$SDK"
+      printf '      compatible size instead of filling both displays. Install Xcode 27.1 or later and run setup again for the full fit.\n'
+    fi
+  fi
 fi
 
 step "Homebrew packages (cmake ninja python)"
@@ -79,7 +86,7 @@ case "$TARGET" in
     "$ROOT/tools/package_macos_app.sh" "$BUILD" "$ROOT/dist"
     echo
     echo "Done. Opening dist/iSlippi.app — choose your disc in the dashboard the first time (it is remembered)."
-    open "$ROOT/dist/iSlippi.app" --args --iso "$ISO" --choose-disc
+    [[ -n "${ISLIPPI_NO_OPEN:-}" ]] || open "$ROOT/dist/iSlippi.app" --args --iso "$ISO" --choose-disc   # install.sh opens the Applications copy instead
     ;;
   device)
     # Your own iPhone or iPad. The app contains the translated game, so it is for your own device only;
