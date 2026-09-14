@@ -311,6 +311,7 @@ int main(int argc, char** argv) {
   host::log("iSlippi %s: Apple Metal frontend", MELEE_PORT_VERSION);
   host::log("paths: iso=%s sys=%s profile=%s replays=%s cache=%s", o.iso.c_str(), o.sys_dir.c_str(), profile_dir.c_str(), replay_dir.c_str(), cache_dir.c_str());
   host::simulation_thread_realtime();   // Mach time-constraint policy: a 16.7 ms period the scheduler must honour (MELEE_REALTIME=0 disables)
+  host::power_play_begin();             // latency-critical activity, no display sleep, thermal-state log
   host::log("slippi: %s%s", offline ? "offline" : "online services enabled, user dir ", offline ? "" : online.user_dir.c_str());
   host::log("execution: %s, fp_profile=%s", allow_interpreter ? "interpreter fallback allowed" : "strict AOT", ppc::fp_profile_name(ppc::fp_profile()));
   if (!host::disc_open(o.iso)) {
@@ -378,6 +379,7 @@ int main(int argc, char** argv) {
     gx::metal_set_overlay(backend, nullptr);
     delete backend;
   }
+  host::power_play_end();
   host::window_destroy();
   ppc::log_aot_diagnostics();
   { uint64_t calls = 0, insns = 0; ppc::interpreter_stats(&calls, &insns);

@@ -10,6 +10,7 @@
   <key>CFBundleVersion</key><string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+  <key>GCSupportsGameMode</key><true/>
   <key>UIDeviceFamily</key><array>${MELEE_DEVICE_FAMILY}</array>
   <key>UIFileSharingEnabled</key><true/>
   <key>LSSupportsOpeningDocumentsInPlace</key><true/>

@@ -9,6 +9,7 @@
 #import <SceneKit/SceneKit.h>
 #import <objc/runtime.h>
 #include "dashboard.h"
+#include "host.h"
 #include "input_config.h"
 #include "mac_launcher.h"
 #include "slippi_login.h"
@@ -612,7 +613,7 @@ API_AVAILABLE(macos(26.0))
   NSStackView* s = [self stackIn:card header:@"DISPLAY & PERFORMANCE" symbol:@"speedometer"];
   id<MTLDevice> gpu = MTLCreateSystemDefaultDevice();
   NSScreen* screen = NSScreen.mainScreen;
-  NSString* info = [NSString stringWithFormat:@"%@  ·  %d Hz display%@  ·  60 Hz simulation, each frame shown on the next refresh", gpu ? gpu.name : @"Metal", display_max_hz(screen), display_max_hz(screen) > 60 ? @" (ProMotion)" : @""];
+  NSString* info = [NSString stringWithFormat:@"%@  ·  %d Hz display%@  ·  thermal %s  ·  60 Hz simulation, each frame shown on the next refresh", gpu ? gpu.name : @"Metal", display_max_hz(screen), display_max_hz(screen) > 60 ? @" (ProMotion)" : @"", host::thermal_state_name()];
   [s addArrangedSubview:label(info, 12, NSFontWeightRegular, 0.7)];
   const int scales[] = {0, 1, 2, 3, 4, 6, 8}; NSInteger scaleIndex = 0;
   for (int i = 0; i < 7; ++i) if (scales[i] == self.settings->scale) scaleIndex = i;

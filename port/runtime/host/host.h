@@ -115,6 +115,13 @@ double phase_lock_total_ms();
 // a few milliseconds of guaranteed computation, so background work on the machine cannot push a
 // frame past its deadline. Apple platforms only; a no-op elsewhere.
 void simulation_thread_realtime();
+// The same policy for any 60 Hz thread (the renderer): `computation_ms` is its typical work per frame.
+void thread_realtime(const char* name, double computation_ms);
+// Power and thermal state (Apple platforms; no-ops elsewhere): keeps the machine from throttling
+// timers or sleeping the display while a game runs, and logs thermal-state changes.
+void power_play_begin();
+void power_play_end();
+const char* thermal_state_name();
 double now_seconds();
 struct SimCostScope { int slot; double t0; explicit SimCostScope(int s) : slot(s), t0(now_seconds()) {} ~SimCostScope() { sim_cost_add(slot, now_seconds() - t0); } };
 

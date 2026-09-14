@@ -8,6 +8,7 @@
 #import <objc/runtime.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include "dashboard.h"
+#include "host.h"
 #include "input_config.h"
 #include "mac_launcher.h"
 #include "slippi_login.h"
@@ -656,7 +657,7 @@ int display_max_hz() {
   UIStackView* s = [self stackIn:card];
   [s addArrangedSubview:[self header:@"DISPLAY & PERFORMANCE" symbol:@"speedometer"]];
   id<MTLDevice> gpu = MTLCreateSystemDefaultDevice();
-  NSString* info = [NSString stringWithFormat:@"%@  ·  %d Hz display  ·  60 Hz simulation, frames shown on the next refresh", gpu ? gpu.name : @"Metal", display_max_hz()];
+  NSString* info = [NSString stringWithFormat:@"%@  ·  %d Hz display  ·  thermal %s  ·  60 Hz simulation, frames shown on the next refresh", gpu ? gpu.name : @"Metal", display_max_hz(), host::thermal_state_name()];
   UILabel* infoLabel = [self label:info size:13 weight:UIFontWeightRegular alpha:0.7];
   [s addArrangedSubview:infoLabel];
   const int scales[] = {0, 1, 2, 3, 4, 6, 8}; NSInteger scaleIndex = 0;

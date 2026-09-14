@@ -15,6 +15,7 @@
 #include <chrono>
 #include <mutex>
 #if defined(__APPLE__)
+#include <fcntl.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <mach/thread_policy.h>
@@ -111,6 +112,10 @@ std::string cstr(uint32_t addr, size_t max) {
 bool disc_open(const std::string& path) {
   g_disc = std::fopen(path.c_str(), "rb");
   if (!g_disc) return false;
+  std::setvbuf(g_disc, nullptr, _IOFBF, 1u << 20);   // disc reads are large and sequential: a 1 MB stdio buffer, plus kernel read-ahead
+#if defined(__APPLE__)
+  fcntl(fileno(g_disc), F_RDAHEAD, 1);
+#endif
   uint8_t hdr[0x440];
   if (!disc_read(0, hdr, sizeof hdr)) return false;
   auto be = [&](int o) { return ((uint32_t)hdr[o] << 24) | ((uint32_t)hdr[o + 1] << 16) | ((uint32_t)hdr[o + 2] << 8) | hdr[o + 3]; };
@@ -229,6 +234,7 @@ void boot_setup() {
   }
   ram = (uint8_t*)std::calloc(ppc::RAM_SIZE + 64, 1);
   aram = (uint8_t*)std::calloc(0x01000000, 1);
+  std::memset(ram, 0, ppc::RAM_SIZE + 64); std::memset(aram, 0, 0x01000000);   // prefault every page now, not on first touch mid-match
   ax::set_memory({rd16, rd32, wr16, wr32, aram, 0x01000000});
   ax::reset();
   cpu = new ppc::Context();
@@ -491,21 +497,29 @@ static std::string sim_cost_line(uint32_t frames) {
 }
 double last_sim_frame_ms() { return g_last_sim_ms; }
 
-void simulation_thread_realtime() {
+void thread_realtime(const char* name, double computation_ms) {
 #if defined(__APPLE__)
   if (const char* e = std::getenv("MELEE_REALTIME")) if (*e == '0') return;
   mach_timebase_info_data_t tb; mach_timebase_info(&tb);
   const double ns_per_tick = (double)tb.numer / (double)tb.denom;
   auto ticks = [&](double ms) { return (uint32_t)(ms * 1e6 / ns_per_tick); };
   thread_time_constraint_policy_data_t policy;
-  policy.period = ticks(16.667);       // one simulation frame
-  policy.computation = ticks(5.0);     // typical work per frame (simulation plus render encoding)
-  policy.constraint = ticks(12.0);     // must be done well inside the period
+  policy.period = ticks(16.667);                          // one simulation frame
+  policy.computation = ticks(computation_ms);             // typical work per frame
+  policy.constraint = ticks(12.0);                        // must be done well inside the period
   policy.preemptible = TRUE;
   kern_return_t kr = thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&policy, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
-  log("simulation thread: real-time scheduling %s (period 16.7 ms, computation 5 ms, constraint 12 ms)", kr == KERN_SUCCESS ? "on" : "unavailable");
+  log("%s thread: real-time scheduling %s (period 16.7 ms, computation %.0f ms, constraint 12 ms)", name, kr == KERN_SUCCESS ? "on" : "unavailable", computation_ms);
+#else
+  (void)name; (void)computation_ms;
 #endif
 }
+void simulation_thread_realtime() { thread_realtime("simulation", 5.0); }
+#if !defined(__APPLE__)
+void power_play_begin() {}
+void power_play_end() {}
+const char* thermal_state_name() { return "unknown"; }
+#endif
 
 // ---- display phase lock (see host.h). Latency as a function of submission phase is a sawtooth:
 // it falls as the grid moves later, then jumps by a display period once a frame misses its

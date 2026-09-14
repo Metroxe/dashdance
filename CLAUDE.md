@@ -14,7 +14,9 @@ build, and the rules that are not obvious from the code.
 ./setup.sh /path/to/melee.iso --device   # dist/iSlippi.ipa for AltStore/SideStore/Sideloadly; --team auto signs and installs over USB
 ```
 
-There is no store distribution and there must not be: the built app contains the translated game.
+There is no store or public-release distribution and there must not be: the built app contains the
+translated game. `tools/release.sh` and `.github/workflows/release.yml` build DMG/IPA release assets for a
+private fork only (both refuse public repositories).
 
 The script installs Homebrew packages (cmake ninja python libusb), clones doldecomp/melee into
 `deps/melee`, extracts `main.dol` from the disc (`tools/extract_dol.py`), fetches the pinned Aurora

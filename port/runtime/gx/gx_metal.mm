@@ -35,7 +35,8 @@ struct Ring {
   id<MTLBuffer> buffer = nil;
   size_t size = 0, used = 0;
   void init(id<MTLDevice> device, size_t bytes) {
-    buffer = [device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+    // Upload-only rings: shared for unified memory, write-combined so the CPU's sequential writes bypass the cache.
+    buffer = [device newBufferWithLength:bytes options:MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined];
     size = bytes; used = 0;
   }
   bool alloc(size_t bytes, size_t align, uint8_t** cpu, size_t* offset) {
@@ -514,20 +515,30 @@ class MetalBackend final : public Backend {
     MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:t.width height:t.height mipmapped:e.levels > 1];
     td.mipmapLevelCount = e.levels;
     td.usage = MTLTextureUsageShaderRead;
-    td.storageMode = MTLStorageModeShared;
+    // Private storage: the GPU keeps the texture in its optimal (compressed, tiled) layout, which is what
+    // makes sampling cheap on Apple GPUs. Levels are decoded into a write-combined staging buffer and
+    // blitted in an upload command buffer that is committed ahead of the frame's.
+    td.storageMode = MTLStorageModePrivate;
     e.texture = [device_ newTextureWithDescriptor:td];
     uint32_t lw = t.width, lh = t.height;
     const uint8_t* level_src = t.data->image.data();
     const size_t available = t.data->image.size();
     size_t consumed = 0;
+    id<MTLBlitCommandEncoder> blit = nil;
     for (uint32_t l = 0; l < e.levels && lw && lh; ++l) {
       const uint32_t bytes = texture_level_bytes(lw, lh, t.format);
       if (consumed + bytes > available) break;
       decode_texture(level_src, lw, lh, t.format, t.data->palette.data(), t.tlut_format, decode_scratch_);
-      [e.texture replaceRegion:MTLRegionMake2D(0, 0, lw, lh) mipmapLevel:l withBytes:decode_scratch_.data() bytesPerRow:lw * 4];
+      const size_t level_bytes = (size_t)lw * lh * 4;
+      id<MTLBuffer> staging = [device_ newBufferWithBytes:decode_scratch_.data() length:level_bytes options:MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined];
+      if (!upload_cb_) upload_cb_ = [queue_ commandBuffer];
+      if (!blit) blit = [upload_cb_ blitCommandEncoder];
+      [blit copyFromBuffer:staging sourceOffset:0 sourceBytesPerRow:lw * 4 sourceBytesPerImage:level_bytes sourceSize:MTLSizeMake(lw, lh, 1)
+                 toTexture:e.texture destinationSlice:0 destinationLevel:l destinationOrigin:MTLOriginMake(0, 0, 0)];
       level_src += bytes; consumed += bytes;
       lw = std::max(1u, lw / 2); lh = std::max(1u, lh / 2);
     }
+    if (blit) [blit endEncoding];
     id<MTLTexture> tex = e.texture;
     textures_[key] = std::move(e);
     return tex;
@@ -940,6 +951,7 @@ class MetalBackend final : public Backend {
         }
 #endif
       }
+      if (upload_cb_) { [upload_cb_ commit]; upload_cb_ = nil; }   // texture uploads land before the frame that samples them
       dispatch_semaphore_t semaphore = frame_semaphore_;
       __block MetalBackend* self_gpu = this;
       [command_ addCompletedHandler:^(id<MTLCommandBuffer> cb) {
@@ -1009,7 +1021,7 @@ class MetalBackend final : public Backend {
   int client_w_, client_h_;
   id<MTLDevice> device_ = nil;
   id<MTLCommandQueue> queue_ = nil;
-  id<MTLCommandBuffer> command_ = nil;
+  id<MTLCommandBuffer> command_ = nil, upload_cb_ = nil;
   id<MTLRenderCommandEncoder> encoder_ = nil;
   id<CAMetalDrawable> drawable_ = nil;
   dispatch_semaphore_t frame_semaphore_ = nullptr;
@@ -1089,6 +1101,7 @@ class MetalThreaded final : public Backend {
   }
   void run() {
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    host::thread_realtime("render", 4.0);
     uint64_t drained = 0, executed = 0;
     try {
       Frame frame;

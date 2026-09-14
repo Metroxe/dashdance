@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstring>
 #include <mutex>
+#include <pthread/qos.h>
 #include <thread>
 
 namespace host {
@@ -38,6 +39,7 @@ std::atomic<uint8_t> g_rumble[4]{};
 std::atomic<bool> g_rumble_dirty{false};
 
 void reader_thread() {
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);   // 1 ms adapter polls must never wait behind background work
   uint8_t start = 0x13;
   int n = 0;
   if (libusb_interrupt_transfer(g_handle, ENDPOINT_OUT, &start, 1, &n, 100) != 0) log("gc adapter: start command failed");

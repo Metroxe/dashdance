@@ -143,7 +143,9 @@ Slippi is competitive, so the app uses what Apple devices offer for latency:
 |---|---|
 | **ProMotion / variable refresh** | The game simulates at 60 Hz (rollback depends on it); every finished frame is shown on the very next refresh of a 120 Hz display instead of waiting for a 60 Hz slot, up to 8 ms sooner. Double-buffered swapchain, iPhone 120 Hz opt-in. |
 | **Game Mode** | Declared as a game, so macOS and iOS give it CPU/GPU priority and cut Bluetooth controller latency in full screen. |
-| **Performance cores** | The simulation and render threads run at user-interactive QoS on Apple silicon. |
+| **Performance cores, real time** | The simulation, render and GameCube-adapter threads run at user-interactive QoS on Apple silicon; the simulation and render threads also hold a Mach time-constraint (real-time) policy with a 16.7 ms period. |
+| **No throttling while playing** | A latency-critical `NSProcessInfo` activity on macOS (no timer coalescing, no App Nap, no display or system sleep) and a disabled idle timer on iOS; `GCSupportsGameMode` so Game Mode engages; thermal-state changes are logged next to the frame timings and shown on the dashboard. |
+| **Unified memory used properly** | Vertex, index and constant rings are shared, write-combined buffers (the CPU streams into them without polluting its cache); game textures live in private storage in the GPU's optimal layout, uploaded by blit from write-combined staging ahead of the frame. Guest RAM is prefaulted at boot; disc reads use a 1 MB buffer with kernel read-ahead. |
 | **Wi-Fi traffic class** | Netplay and matchmaking sockets use the voice service class, the lowest-latency Wi-Fi queue. |
 | **Controllers** | GameCube adapter (WUP-028) over USB on macOS, any Bluetooth or MFi pad with rumble, keyboard, and touch with haptics. Ports and mappings per controller. |
 | **Measured latency** | With the game's own instrumentation (`MELEE_METAL_LATENCY=1` logs XFB-copy-to-panel time from Metal's presented timestamps): about 10 ms in full screen on a 120 Hz MacBook Pro, about 25 ms in a window, because a window costs one compositor frame. Full screen is the default; ⌥⏎ toggles. The simulation itself takes about 4 ms of each 16.7 ms frame on an M5 Pro, GPU work 5–8 ms, render encoding about 1 ms. |
@@ -222,6 +224,20 @@ xcrun simctl install booted build/ios-sim/port/iSlippi.app
 Use `-DCMAKE_OSX_SYSROOT=iphoneos` for a device (sign the bundle with your team) and `-DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xrsimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=1.0` for the Vision Pro Simulator.
 
 `melee_port_mac --help` lists every option (window size, volume, input delay, explicit disc or Slippi folder). `melee_port_metal` and `melee_port_headless` are offline diagnostic executables used by the test suite. Developer notes live in [docs/](docs/): [PERFORMANCE.md](docs/PERFORMANCE.md) explains every log signal and the measurement scripts, and [CLAUDE.md](CLAUDE.md) is the agent and contributor guide.
+
+## Releases
+
+There are no public downloads, and there must not be: the built app contains the translated game, so a
+`.dmg` or `.ipa` on a public Releases page would hand Nintendo's code to everyone (and go against the
+Slippi team's wishes). What exists instead:
+
+- `tools/release.sh /path/to/melee.iso` builds `dist/iSlippi-<version>.dmg`, `dist/iSlippi-<version>.ipa`,
+  checksums and release notes (generated from the commits since the last tag, in player terms) on your
+  Mac. Add `--publish` to create a **draft** GitHub release with them; the script refuses unless the
+  repository is private.
+- `.github/workflows/release.yml` does the same on a `macos-26` runner for a **private fork**: upload your
+  `main.dol` once as the asset of a release tagged `inputs` (`gh release create inputs main.dol`), then
+  push a `v*` tag matching `VERSION`. It refuses to run on a public repository.
 
 ## Windows
 

@@ -1,0 +1,61 @@
+# Release build for a PRIVATE fork. The app contains the translated game, so this workflow only makes sense
+# where the built artifacts stay private. It needs one thing the public repo cannot contain: your disc's
+# main.dol, uploaded once as the asset of a release tagged `inputs` in your private fork
+# (gh release create inputs main.dol --title "build inputs" --notes "private").
+#
+# Trigger: push a tag v* (the VERSION file must match), or run it by hand.
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-26
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse to run on a public repository
+        run: |
+          [[ "${{ github.event.repository.private }}" == "true" ]] || { echo "This workflow publishes the built game; it runs only on a private fork."; exit 1; }
+      - name: Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer 2>/dev/null || sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)/Contents/Developer"; xcodebuild -version
+      - name: Tools
+        run: brew install cmake ninja libusb python && python3 -m pip install --quiet --user pillow || true
+      - name: Build inputs (main.dol from the private `inputs` release)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: mkdir -p deps/disc && gh release download inputs --pattern main.dol --dir deps/disc
+      - name: doldecomp/melee
+        run: git clone --depth 1 https://github.com/doldecomp/melee.git deps/melee
+      - name: Aurora
+        run: tools/bootstrap_aurora.sh
+      - name: macOS app
+        run: |
+          python3 tools/bootstrap_port.py --decomp-root deps/melee --dol deps/disc/main.dol --build-dir build/mac --gct-base 0x8065CC80 --macos-arch arm64 --stage generate
+          cmake -S . -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DMELEE_DECOMP_ROOT=$PWD/deps/melee -DMELEE_DOL_PATH=$PWD/deps/disc/main.dol -DMELEE_PORT_GENERATED_DIR=$PWD/build/mac/generated/guest \
+            -DMELEE_BUILD_PORT_TESTS=OFF -DMELEE_BUILD_PORT_HEADLESS=OFF -DMELEE_BUILD_PORT_METAL=ON
+          cmake --build build/mac --target melee_port_mac --parallel
+          tools/package_macos_app.sh build/mac dist
+          V=$(head -n1 VERSION); S=$(mktemp -d); cp -R dist/iSlippi.app "$S/"; ln -s /Applications "$S/Applications"
+          hdiutil create -volname "iSlippi $V" -srcfolder "$S" -ov -format UDZO -quiet "dist/iSlippi-$V.dmg"
+      - name: iPhone/iPad IPA (ad-hoc, for sideloading)
+        run: |
+          export DEVELOPER_DIR="$(xcode-select -p)"
+          python3 tools/bootstrap_port.py --decomp-root deps/melee --dol deps/disc/main.dol --build-dir build/ios-device --gct-base 0x8065CC80 --macos-arch arm64 --stage generate
+          cmake -S . -B build/ios-device -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+            -DMELEE_DECOMP_ROOT=$PWD/deps/melee -DMELEE_DOL_PATH=$PWD/deps/disc/main.dol -DMELEE_PORT_GENERATED_DIR=$PWD/build/ios-device/generated/guest \
+            -DMELEE_BUILD_PORT_TESTS=OFF -DMELEE_BUILD_PORT_HEADLESS=OFF -DMELEE_BUILD_PORT_METAL=ON
+          cmake --build build/ios-device --target melee_port_mac --parallel
+          codesign --force --sign - --timestamp=none build/ios-device/port/iSlippi.app
+          V=$(head -n1 VERSION); mkdir -p dist/ipa/Payload && cp -R build/ios-device/port/iSlippi.app dist/ipa/Payload/ && (cd dist/ipa && zip -qry "../iSlippi-$V.ipa" Payload)
+      - name: Checksums and notes
+        run: V=$(head -n1 VERSION); (cd dist && shasum -a 256 "iSlippi-$V.dmg" "iSlippi-$V.ipa" > "SHA256SUMS-$V.txt"); python3 tools/release_notes.py > dist/RELEASE_NOTES.md; cat dist/RELEASE_NOTES.md
+      - name: Draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: V=$(head -n1 VERSION); gh release create "${{ github.ref_name }}" --draft --title "iSlippi $V" --notes-file dist/RELEASE_NOTES.md "dist/iSlippi-$V.dmg" "dist/iSlippi-$V.ipa" "dist/SHA256SUMS-$V.txt"
+      - uses: actions/upload-artifact@v4
+        with: { name: iSlippi-${{ github.ref_name }}, path: "dist/*.dmg\ndist/*.ipa\ndist/SHA256SUMS-*.txt\ndist/RELEASE_NOTES.md", retention-days: 14 }
