@@ -43,7 +43,7 @@ void haptic_notify(bool success) {
   UINotificationFeedbackGenerator* g = [[UINotificationFeedbackGenerator alloc] init]; [g prepare]; [g notificationOccurred:success ? UINotificationFeedbackTypeSuccess : UINotificationFeedbackTypeError];
 #endif
 }
-// The Slippi mark ships in the bundle (SlippiMark.png, from the icon's glyph layer); MELEE_MARK points at it when running unbundled.
+// The Slippi mark ships in the bundle (SlippiMark.png, from the icon's glyph layer); MELEE_MARK overrides the path (for the bare binary).
 UIImage* slippi_mark() {
   NSString* path = [NSBundle.mainBundle pathForResource:@"SlippiMark" ofType:@"png"];
   if (const char* env = std::getenv("MELEE_MARK")) path = [NSString stringWithUTF8String:env];
@@ -462,9 +462,9 @@ int display_max_hz() {
   UILabel* value = [self label:@"" size:14 weight:UIFontWeightMedium alpha:0.7];
   value.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium]; value.textAlignment = NSTextAlignmentRight;
   [value.widthAnchor constraintEqualToConstant:52].active = YES;
-  void (^update)(void) = ^{ value.text = [NSString stringWithFormat:format, slider.value * scale]; };
-  [slider addAction:[UIAction actionWithHandler:^(UIAction*) { update(); }] forControlEvents:UIControlEventValueChanged];
-  update();
+  __weak UILabel* weakValue = value;   // the slider retains the action; the action must not retain the slider
+  [slider addAction:[UIAction actionWithHandler:^(UIAction* a) { UISlider* sl = (UISlider*)a.sender; weakValue.text = [NSString stringWithFormat:format, sl.value * scale]; }] forControlEvents:UIControlEventValueChanged];
+  value.text = [NSString stringWithFormat:format, slider.value * scale];
   UIStackView* pair = [[UIStackView alloc] init]; pair.axis = UILayoutConstraintAxisHorizontal; pair.spacing = 8; pair.alignment = UIStackViewAlignmentCenter;
   [pair addArrangedSubview:slider]; [pair addArrangedSubview:value];
   [slider.widthAnchor constraintEqualToConstant:150].active = YES;

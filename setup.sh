@@ -10,11 +10,11 @@
 # ISLIPPI_JOBS (parallel jobs). Re-running is safe: every step skips work that is already done.
 set -euo pipefail
 ROOT="${0:A:h}"
-ISO="${1:-${ISLIPPI_ISO:-}}"
-TARGET="mac"
-for arg in "$@"; do case "$arg" in --ios) TARGET=ios;; --visionos) TARGET=visionos;; --mac) TARGET=mac;; esac; done
 step() { printf '\n\033[1;33m==> %s\033[0m\n' "$1"; }
 fail() { printf '\033[1;31merror:\033[0m %s\n' "$1" >&2; exit 1; }
+ISO="${ISLIPPI_ISO:-}"
+TARGET="mac"
+for arg in "$@"; do case "$arg" in --ios) TARGET=ios;; --visionos) TARGET=visionos;; --mac) TARGET=mac;; --*) fail "unknown option $arg";; *) ISO="$arg";; esac; done
 
 [[ "$(uname)" == "Darwin" ]] || fail "iSlippi builds on macOS (Apple silicon). See README.md for other platforms."
 [[ "$(uname -m)" == "arm64" ]] || fail "an Apple silicon Mac is required."

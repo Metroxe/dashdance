@@ -80,8 +80,7 @@ NSColor* rgb(CGFloat r, CGFloat g, CGFloat b, CGFloat a = 1) { return [NSColor c
 NSColor* kYellow() { return rgb(0.97, 0.79, 0.28); }
 NSColor* kSlippiGreen() { return rgb(0.18, 0.76, 0.42); }
 NSColor* kGlassTint() { return rgb(0.30, 0.40, 1.0, 0.10); }
-bool glass_available() { if (@available(macOS 26.0, *)) return true; return false; }
-// The Slippi mark ships in the bundle (SlippiMark.png, the icon's glyph layer); MELEE_MARK points at it when running unbundled.
+// The Slippi mark ships in the bundle (SlippiMark.png, the icon's glyph layer); MELEE_MARK overrides the path (for the bare binary).
 NSImage* slippi_mark() {
   NSString* path = [NSBundle.mainBundle pathForResource:@"SlippiMark" ofType:@"png"];
   if (const char* env = std::getenv("MELEE_MARK")) path = [NSString stringWithUTF8String:env];
@@ -90,6 +89,9 @@ NSImage* slippi_mark() {
   return image;
 }
 NSColor* kInk() { return rgb(0.10, 0.08, 0.02); }
+static const void* const kSliderLabelKey = &kSliderLabelKey;    // associated-object keys for the slider value labels
+static const void* const kSliderFormatKey = &kSliderFormatKey;
+static const void* const kSliderScaleKey = &kSliderScaleKey;
 NSColor* kGreen() { return rgb(0.30, 0.85, 0.45); }
 NSColor* kRed() { return rgb(0.89, 0.27, 0.17); }
 NSString* ns(const std::string& s) { return [NSString stringWithUTF8String:s.c_str()]; }
@@ -437,7 +439,7 @@ API_AVAILABLE(macos(26.0))
   value.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightMedium]; value.textColor = [NSColor colorWithWhite:1 alpha:0.7]; value.alignment = NSTextAlignmentRight;
   [value.widthAnchor constraintEqualToConstant:46].active = YES;
   value.stringValue = [NSString stringWithFormat:format, slider.doubleValue * scale];
-  objc_setAssociatedObject(slider, "value-label", value, OBJC_ASSOCIATION_RETAIN); objc_setAssociatedObject(slider, "value-format", format, OBJC_ASSOCIATION_COPY); objc_setAssociatedObject(slider, "value-scale", @(scale), OBJC_ASSOCIATION_RETAIN);
+  objc_setAssociatedObject(slider, kSliderLabelKey, value, OBJC_ASSOCIATION_RETAIN); objc_setAssociatedObject(slider, kSliderFormatKey, format, OBJC_ASSOCIATION_COPY); objc_setAssociatedObject(slider, kSliderScaleKey, @(scale), OBJC_ASSOCIATION_RETAIN);
   slider.target = self; slider.action = @selector(sliderChanged:); slider.continuous = YES;
   NSStackView* pair = [[NSStackView alloc] init]; pair.orientation = NSUserInterfaceLayoutOrientationHorizontal; pair.spacing = 8;
   [pair addArrangedSubview:slider]; [pair addArrangedSubview:value];
@@ -445,7 +447,7 @@ API_AVAILABLE(macos(26.0))
   return [self row:text symbol:name control:pair];
 }
 - (void)sliderChanged:(NSSlider*)slider {
-  NSTextField* value = objc_getAssociatedObject(slider, "value-label"); NSString* format = objc_getAssociatedObject(slider, "value-format"); NSNumber* scale = objc_getAssociatedObject(slider, "value-scale");
+  NSTextField* value = objc_getAssociatedObject(slider, kSliderLabelKey); NSString* format = objc_getAssociatedObject(slider, kSliderFormatKey); NSNumber* scale = objc_getAssociatedObject(slider, kSliderScaleKey);
   if (value && format) value.stringValue = [NSString stringWithFormat:format, slider.doubleValue * scale.doubleValue];
 }
 - (NSStackView*)row:(NSString*)text symbol:(NSString*)name control:(NSView*)control {
@@ -909,7 +911,7 @@ API_AVAILABLE(macos(26.0))
   menu.autoenablesItems = NO;
   const host::Dashboard& d = self.dashboard;
   if (d.signed_in) {
-    self.item.button.title = d.profile_loaded && d.profile.ranked ? ns("  " + d.rank()) : @"";
+    if (self.item.button.image) self.item.button.title = d.profile_loaded && d.profile.ranked ? ns("  " + d.rank()) : @"";
     NSMenuItem* who = [self info:[NSString stringWithFormat:@"%s  %s", d.name.c_str(), d.code.c_str()]];
     who.attributedTitle = [[NSAttributedString alloc] initWithString:who.title attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]}];
     [menu addItem:who];
@@ -931,7 +933,7 @@ API_AVAILABLE(macos(26.0))
       recent.submenu = sub; [menu addItem:recent];
     }
   } else {
-    self.item.button.title = @"";
+    if (self.item.button.image) self.item.button.title = @"";
     [menu addItem:[self info:@"Not signed in to Slippi"]];
   }
   [menu addItem:[NSMenuItem separatorItem]];

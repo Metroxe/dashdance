@@ -453,12 +453,13 @@ static double g_sim_costs_window[SIM_COST_COUNT];   // accumulated over the 60-f
 static double g_sim_ms_window = 0, g_sim_ms_worst = 0;
 static const char* const g_sim_cost_names[SIM_COST_COUNT] = {"disc", "ax", "jukebox", "exi", "texsnap", "queue", "observe", "render", "texture", "pump", "gpuwait", "drawable"};
 static double g_sim_frame_start = 0.0, g_last_sim_ms = 0.0;
-static std::thread::id g_sim_thread;                 // set by the first retrace; other threads (the renderer) report separately
+static std::atomic<std::thread::id> g_sim_thread;    // set by the first retrace; other threads (the renderer) report separately
 static double g_render_costs_window[SIM_COST_COUNT];
 static std::mutex g_render_costs_mutex;
 void sim_cost_add(int slot, double seconds) {
   if (slot < 0 || slot >= SIM_COST_COUNT) return;
-  if (g_sim_thread == std::thread::id() || std::this_thread::get_id() == g_sim_thread) { g_sim_costs[slot] += seconds; g_sim_costs_window[slot] += seconds; return; }
+  const std::thread::id sim = g_sim_thread.load(std::memory_order_relaxed);
+  if (sim == std::thread::id() || std::this_thread::get_id() == sim) { g_sim_costs[slot] += seconds; g_sim_costs_window[slot] += seconds; return; }
   std::lock_guard<std::mutex> lock(g_render_costs_mutex);
   g_render_costs_window[slot] += seconds;
 }
@@ -541,7 +542,7 @@ double phase_lock_total_ms() { return g_phase_total_ms; }
 
 void retrace() {
   struct Guard { Guard() { g_in_retrace = true; } ~Guard() { g_in_retrace = false; } } guard;
-  if (g_sim_thread == std::thread::id()) g_sim_thread = std::this_thread::get_id();
+  if (g_sim_thread.load(std::memory_order_relaxed) == std::thread::id()) g_sim_thread.store(std::this_thread::get_id());
   ++g_retraces;
   {
     double now = now_seconds();
