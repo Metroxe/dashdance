@@ -16,16 +16,66 @@
 #include <string>
 #include <vector>
 
+// Help menu links (menu items need a target outside the responder chain).
+@interface MULinks : NSObject
+@end
+@implementation MULinks
+- (void)openGitHub:(id)sender { [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://github.com/TheAndersMadsen/islippi"]]; }
+- (void)openSlippiSite:(id)sender { [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://slippi.gg"]]; }
+@end
+static MULinks* g_links = nil;
+
 namespace {
+NSMenu* build_main_menu() {
+  NSMenu* menubar = [[NSMenu alloc] init];
+  NSMenuItem* appItem = [[NSMenuItem alloc] init]; [menubar addItem:appItem];
+  NSMenu* app = [[NSMenu alloc] initWithTitle:@"iSlippi"];
+  [app addItemWithTitle:@"About iSlippi" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
+  [app addItem:[NSMenuItem separatorItem]];
+  [app addItemWithTitle:@"Hide iSlippi" action:@selector(hide:) keyEquivalent:@"h"];
+  NSMenuItem* hideOthers = [app addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"];
+  hideOthers.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+  [app addItemWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""];
+  [app addItem:[NSMenuItem separatorItem]];
+  [app addItemWithTitle:@"Quit iSlippi" action:@selector(terminate:) keyEquivalent:@"q"];
+  appItem.submenu = app;
+  NSMenuItem* windowItem = [[NSMenuItem alloc] init]; [menubar addItem:windowItem];
+  NSMenu* window = [[NSMenu alloc] initWithTitle:@"Window"];
+  [window addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
+  [window addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
+  NSMenuItem* fs = [window addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+  fs.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
+  windowItem.submenu = window;
+  NSApp.windowsMenu = window;
+  NSMenuItem* helpItem = [[NSMenuItem alloc] init]; [menubar addItem:helpItem];
+  NSMenu* help = [[NSMenu alloc] initWithTitle:@"Help"];
+  NSMenuItem* gh = [help addItemWithTitle:@"iSlippi on GitHub" action:@selector(openGitHub:) keyEquivalent:@""]; gh.target = g_links;
+  NSMenuItem* sg = [help addItemWithTitle:@"Slippi.gg" action:@selector(openSlippiSite:) keyEquivalent:@""]; sg.target = g_links;
+  helpItem.submenu = help;
+  NSApp.helpMenu = help;
+  return menubar;
+}
 void prepare_application() {
   [NSApplication sharedApplication];
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   static bool launched = false;
-  if (!launched) { [NSApp finishLaunching]; launched = true; }
+  if (!launched) { g_links = [[MULinks alloc] init]; NSApp.mainMenu = build_main_menu(); [NSApp finishLaunching]; launched = true; }
   [NSApp activateIgnoringOtherApps:YES];
 }
 NSColor* rgb(CGFloat r, CGFloat g, CGFloat b, CGFloat a = 1) { return [NSColor colorWithSRGBRed:r green:g blue:b alpha:a]; }
+// Theme: Melee's menu yellow on deep blue, Slippi green for the mark. One place for every colour.
 NSColor* kYellow() { return rgb(0.97, 0.79, 0.28); }
+NSColor* kSlippiGreen() { return rgb(0.18, 0.76, 0.42); }
+NSColor* kGlassTint() { return rgb(0.30, 0.40, 1.0, 0.10); }
+bool glass_available() { if (@available(macOS 26.0, *)) return true; return false; }
+// The Slippi mark ships in the bundle (SlippiMark.png, the icon's glyph layer); MELEE_MARK points at it when running unbundled.
+NSImage* slippi_mark() {
+  NSString* path = [NSBundle.mainBundle pathForResource:@"SlippiMark" ofType:@"png"];
+  if (const char* env = std::getenv("MELEE_MARK")) path = [NSString stringWithUTF8String:env];
+  NSImage* image = path ? [[NSImage alloc] initWithContentsOfFile:path] : nil;
+  [image setTemplate:YES];
+  return image;
+}
 NSColor* kInk() { return rgb(0.10, 0.08, 0.02); }
 NSColor* kGreen() { return rgb(0.30, 0.85, 0.45); }
 NSColor* kRed() { return rgb(0.89, 0.27, 0.17); }
@@ -161,6 +211,12 @@ int display_max_hz(NSScreen* screen) {
 @implementation MUFlippedView
 - (BOOL)isFlipped { return YES; }
 @end
+API_AVAILABLE(macos(26.0))
+@interface MUGlassContainer : NSGlassEffectContainerView
+@end
+@implementation MUGlassContainer
+- (BOOL)isFlipped { return YES; }
+@end
 
 // ---- angled yellow section header (Melee menu bar)
 @interface MUHeaderView : NSView
@@ -208,14 +264,14 @@ int display_max_hz(NSScreen* screen) {
 // hero
 @property(nonatomic) NSTextField* playerChip; @property(nonatomic) NSBox* chipBox;
 // steps
-@property(nonatomic) NSBox* stepsCard; @property(nonatomic) NSArray<NSTextField*>* stepLabels; @property(nonatomic) NSArray<NSImageView*>* stepIcons;
+@property(nonatomic) NSView* stepsCard; @property(nonatomic) NSArray<NSTextField*>* stepLabels; @property(nonatomic) NSArray<NSImageView*>* stepIcons;
 // disc
 @property(nonatomic) NSTextField* discName; @property(nonatomic) NSTextField* discHint; @property(nonatomic) NSButton* playButton;
 // account
 @property(nonatomic) NSTextField* accountLabel; @property(nonatomic) NSTextField* emailField; @property(nonatomic) NSSecureTextField* passwordField; @property(nonatomic) NSButton* signInButton; @property(nonatomic) NSProgressIndicator* spinner; @property(nonatomic) NSButton* signOutButton; @property(nonatomic) NSStackView* signInRows;
 // ranked / games
-@property(nonatomic) NSBox* rankedCard; @property(nonatomic) NSTextField* rankLabel; @property(nonatomic) NSTextField* ratingLabel; @property(nonatomic) NSTextField* recordLabel; @property(nonatomic) NSView* winTrack; @property(nonatomic) NSView* winBar; @property(nonatomic) NSLayoutConstraint* winBarWidth; @property(nonatomic) NSTextField* placementLabel; @property(nonatomic) NSTextField* mainsLabel;
-@property(nonatomic) NSBox* gamesCard; @property(nonatomic) NSStackView* gamesStack;
+@property(nonatomic) NSView* rankedCard; @property(nonatomic) NSTextField* rankLabel; @property(nonatomic) NSTextField* ratingLabel; @property(nonatomic) NSTextField* recordLabel; @property(nonatomic) NSView* winTrack; @property(nonatomic) NSView* winBar; @property(nonatomic) NSLayoutConstraint* winBarWidth; @property(nonatomic) NSTextField* placementLabel; @property(nonatomic) NSTextField* mainsLabel;
+@property(nonatomic) NSView* gamesCard; @property(nonatomic) NSStackView* gamesStack;
 // controllers
 @property(nonatomic) NSStackView* controllersStack; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic, copy) NSString* remapGuid; @property(nonatomic) int capturing; @property(nonatomic) BOOL armed; @property(nonatomic) NSArray<NSButton*>* remapButtons;
 // display
@@ -256,12 +312,23 @@ int display_max_hz(NSScreen* screen) {
   [content addSubview:backdrop];
   NSScrollView* scroll = [[NSScrollView alloc] init];
   scroll.translatesAutoresizingMaskIntoConstraints = NO; scroll.drawsBackground = NO; scroll.hasVerticalScroller = YES; scroll.automaticallyAdjustsContentInsets = NO;
-  NSView* doc = [[MUFlippedView alloc] init]; doc.translatesAutoresizingMaskIntoConstraints = NO;
+  NSView* doc = [[MUFlippedView alloc] init]; doc.translatesAutoresizingMaskIntoConstraints = NO;   // the scroll document
+  NSView* column = doc;                                                                               // where the cards live
+  if (@available(macOS 26.0, *)) {
+    // One glass container around the column: nearby glass cards merge and render as a batch.
+    MUGlassContainer* container = [[MUGlassContainer alloc] init];
+    container.translatesAutoresizingMaskIntoConstraints = NO; container.spacing = 12;
+    NSView* inner = [[MUFlippedView alloc] init]; inner.translatesAutoresizingMaskIntoConstraints = NO;
+    container.contentView = inner;
+    [NSLayoutConstraint activateConstraints:@[[inner.topAnchor constraintEqualToAnchor:container.topAnchor], [inner.bottomAnchor constraintEqualToAnchor:container.bottomAnchor],
+                                              [inner.leadingAnchor constraintEqualToAnchor:container.leadingAnchor], [inner.trailingAnchor constraintEqualToAnchor:container.trailingAnchor]]];
+    doc = container; column = inner;
+  }
   scroll.documentView = doc;
   [content addSubview:scroll];
   self.stack = [[MUColumn alloc] init];
   self.stack.spacing = 14; self.stack.translatesAutoresizingMaskIntoConstraints = NO;
-  [doc addSubview:self.stack];
+  [column addSubview:self.stack];
   [NSLayoutConstraint activateConstraints:@[
     [backdrop.topAnchor constraintEqualToAnchor:content.topAnchor], [backdrop.bottomAnchor constraintEqualToAnchor:content.bottomAnchor], [backdrop.leadingAnchor constraintEqualToAnchor:content.leadingAnchor], [backdrop.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
     [scroll.topAnchor constraintEqualToAnchor:content.topAnchor], [scroll.bottomAnchor constraintEqualToAnchor:content.bottomAnchor], [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor], [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
@@ -274,12 +341,13 @@ int display_max_hz(NSScreen* screen) {
   self.stepsCard = [self buildSteps];
   self.rankedCard = [self buildRanked];
   self.gamesCard = [self buildGames];
-  NSBox* account = [self buildAccount];
-  NSBox* disc = [self buildDisc];
-  NSBox* controllers = [self buildControllers];
-  NSBox* display = [self buildDisplay];
+  NSView* account = [self buildAccount];
+  NSView* disc = [self buildDisc];
+  NSView* controllers = [self buildControllers];
+  NSView* display = [self buildDisplay];
   self.playButton = [NSButton buttonWithTitle:@"  PLAY  " target:self action:@selector(play)];
   self.playButton.bezelStyle = NSBezelStyleRounded; self.playButton.controlSize = NSControlSizeLarge; self.playButton.keyEquivalent = @"\r";
+  if (@available(macOS 26.0, *)) self.playButton.bezelStyle = NSBezelStyleGlass;
   self.playButton.bezelColor = kYellow(); self.playButton.font = meleeFont(18); self.playButton.contentTintColor = kInk();
   self.playButton.image = symbol(@"play.fill", 15, NSFontWeightBold); self.playButton.imagePosition = NSImageLeading;
   [self.playButton.heightAnchor constraintEqualToConstant:44].active = YES;
@@ -313,20 +381,57 @@ int display_max_hz(NSScreen* screen) {
 }
 
 // ---- building blocks
-- (NSBox*)card {
+// A card: Liquid Glass on macOS 26 (tinted toward the backdrop's blue), a translucent box otherwise.
+- (NSView*)card { return [self cardTinted:kGlassTint()]; }
+- (NSView*)cardTinted:(NSColor*)tint {
+  if (@available(macOS 26.0, *)) {
+    NSGlassEffectView* g = [[NSGlassEffectView alloc] init];
+    g.cornerRadius = 20; g.tintColor = tint; g.style = NSGlassEffectViewStyleRegular;
+    NSView* host = [[NSView alloc] init];
+    g.contentView = host;
+    return g;
+  }
   NSBox* box = [[NSBox alloc] init];
   box.boxType = NSBoxCustom; box.cornerRadius = 16; box.borderWidth = 1;
   box.borderColor = rgb(0.5, 0.6, 1.0, 0.16); box.fillColor = rgb(0.06, 0.07, 0.16, 0.82); box.contentViewMargins = NSMakeSize(0, 0);
   return box;
 }
-- (NSStackView*)stackIn:(NSBox*)box header:(NSString*)title symbol:(NSString*)name {
+- (NSView*)hostOf:(NSView*)card {
+  if ([card isKindOfClass:NSBox.class]) return ((NSBox*)card).contentView;
+  if (@available(macOS 26.0, *)) { if ([card isKindOfClass:NSGlassEffectView.class]) return ((NSGlassEffectView*)card).contentView; }
+  return card;
+}
+- (NSStackView*)stackIn:(NSView*)card header:(NSString*)title symbol:(NSString*)name {
+  NSView* host = [self hostOf:card];
   NSStackView* s = [[MUColumn alloc] init];
   s.translatesAutoresizingMaskIntoConstraints = NO;
-  [box.contentView addSubview:s];
-  [NSLayoutConstraint activateConstraints:@[[s.topAnchor constraintEqualToAnchor:box.contentView.topAnchor constant:14], [s.bottomAnchor constraintEqualToAnchor:box.contentView.bottomAnchor constant:-16],
-                                            [s.leadingAnchor constraintEqualToAnchor:box.contentView.leadingAnchor constant:16], [s.trailingAnchor constraintEqualToAnchor:box.contentView.trailingAnchor constant:-16]]];
+  [host addSubview:s];
+  [NSLayoutConstraint activateConstraints:@[[s.topAnchor constraintEqualToAnchor:host.topAnchor constant:14], [s.bottomAnchor constraintEqualToAnchor:host.bottomAnchor constant:-16],
+                                            [s.leadingAnchor constraintEqualToAnchor:host.leadingAnchor constant:16], [s.trailingAnchor constraintEqualToAnchor:host.trailingAnchor constant:-16]]];
+  if (host != card) {   // the glass view sizes itself around its content view
+    host.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[[host.topAnchor constraintEqualToAnchor:card.topAnchor], [host.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
+                                              [host.leadingAnchor constraintEqualToAnchor:card.leadingAnchor], [host.trailingAnchor constraintEqualToAnchor:card.trailingAnchor]]];
+  }
   [s addArrangedSubview:[[MUHeaderView alloc] initWithTitle:title symbol:name]];
   return s;
+}
+// A slider with its value shown next to it (formatted by `format`, value scaled by `scale`).
+- (NSStackView*)sliderRow:(NSString*)text symbol:(NSString*)name slider:(NSSlider*)slider format:(NSString*)format scale:(double)scale {
+  NSTextField* value = [NSTextField labelWithString:@""];
+  value.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightMedium]; value.textColor = [NSColor colorWithWhite:1 alpha:0.7]; value.alignment = NSTextAlignmentRight;
+  [value.widthAnchor constraintEqualToConstant:46].active = YES;
+  value.stringValue = [NSString stringWithFormat:format, slider.doubleValue * scale];
+  objc_setAssociatedObject(slider, "value-label", value, OBJC_ASSOCIATION_RETAIN); objc_setAssociatedObject(slider, "value-format", format, OBJC_ASSOCIATION_COPY); objc_setAssociatedObject(slider, "value-scale", @(scale), OBJC_ASSOCIATION_RETAIN);
+  slider.target = self; slider.action = @selector(sliderChanged:); slider.continuous = YES;
+  NSStackView* pair = [[NSStackView alloc] init]; pair.orientation = NSUserInterfaceLayoutOrientationHorizontal; pair.spacing = 8;
+  [pair addArrangedSubview:slider]; [pair addArrangedSubview:value];
+  [slider.widthAnchor constraintEqualToConstant:150].active = YES;
+  return [self row:text symbol:name control:pair];
+}
+- (void)sliderChanged:(NSSlider*)slider {
+  NSTextField* value = objc_getAssociatedObject(slider, "value-label"); NSString* format = objc_getAssociatedObject(slider, "value-format"); NSNumber* scale = objc_getAssociatedObject(slider, "value-scale");
+  if (value && format) value.stringValue = [NSString stringWithFormat:format, slider.doubleValue * scale.doubleValue];
 }
 - (NSStackView*)row:(NSString*)text symbol:(NSString*)name control:(NSView*)control {
   NSStackView* row = [[NSStackView alloc] init];
@@ -339,9 +444,12 @@ int display_max_hz(NSScreen* screen) {
   if ([control isKindOfClass:NSSlider.class]) [control.widthAnchor constraintEqualToConstant:180].active = YES;
   return row;
 }
+// Buttons are glass on macOS 26, rounded otherwise.
 - (NSButton*)button:(NSString*)title symbol:(NSString*)name action:(SEL)action {
   NSButton* b = [NSButton buttonWithTitle:title target:self action:action];
-  b.image = symbol(name, 12, NSFontWeightSemibold); b.imagePosition = NSImageLeading; b.bezelStyle = NSBezelStyleRounded; b.controlSize = NSControlSizeLarge;
+  b.image = symbol(name, 12, NSFontWeightSemibold); b.imagePosition = NSImageLeading; b.controlSize = NSControlSizeLarge;
+  b.bezelStyle = NSBezelStyleRounded;
+  if (@available(macOS 26.0, *)) b.bezelStyle = NSBezelStyleGlass;
   return b;
 }
 - (NSSwitch*)toggle:(BOOL)on { NSSwitch* s = [[NSSwitch alloc] init]; s.state = on ? NSControlStateValueOn : NSControlStateValueOff; s.controlSize = NSControlSizeSmall; return s; }
@@ -355,7 +463,35 @@ int display_max_hz(NSScreen* screen) {
 - (NSView*)buildHero {
   NSStackView* hero = [[NSStackView alloc] init];
   hero.orientation = NSUserInterfaceLayoutOrientationVertical; hero.alignment = NSLayoutAttributeCenterX; hero.spacing = 6;
-  [hero addArrangedSubview:[[MUHeroView alloc] initWithSize:110]];
+  if (NSImage* mark = slippi_mark()) {
+    const CGFloat size = 124;
+    NSView* disc;
+    NSImageView* iv = [NSImageView imageViewWithImage:mark];
+    iv.contentTintColor = NSColor.whiteColor; iv.imageScaling = NSImageScaleProportionallyUpOrDown; iv.translatesAutoresizingMaskIntoConstraints = NO;
+    if (@available(macOS 26.0, *)) {
+      NSGlassEffectView* g = [[NSGlassEffectView alloc] init];
+      g.cornerRadius = size / 2; g.tintColor = [kSlippiGreen() colorWithAlphaComponent:0.22];
+      NSView* host = [[NSView alloc] init]; g.contentView = host; disc = g;
+      host.translatesAutoresizingMaskIntoConstraints = NO;
+      [NSLayoutConstraint activateConstraints:@[[host.topAnchor constraintEqualToAnchor:g.topAnchor], [host.bottomAnchor constraintEqualToAnchor:g.bottomAnchor], [host.leadingAnchor constraintEqualToAnchor:g.leadingAnchor], [host.trailingAnchor constraintEqualToAnchor:g.trailingAnchor]]];
+      [host addSubview:iv];
+    } else {
+      NSBox* box = [[NSBox alloc] init]; box.boxType = NSBoxCustom; box.cornerRadius = size / 2; box.borderWidth = 1; box.borderColor = [NSColor colorWithWhite:1 alpha:0.25]; box.fillColor = [kSlippiGreen() colorWithAlphaComponent:0.35]; box.contentViewMargins = NSMakeSize(0, 0);
+      [box.contentView addSubview:iv]; disc = box;
+    }
+    disc.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[[disc.widthAnchor constraintEqualToConstant:size], [disc.heightAnchor constraintEqualToConstant:size],
+                                              [iv.centerXAnchor constraintEqualToAnchor:disc.centerXAnchor], [iv.centerYAnchor constraintEqualToAnchor:disc.centerYAnchor],
+                                              [iv.widthAnchor constraintEqualToConstant:80], [iv.heightAnchor constraintEqualToConstant:80]]];
+    iv.wantsLayer = YES;
+    CABasicAnimation* breathe = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+    breathe.fromValue = @1.0; breathe.toValue = @1.05; breathe.duration = 2.4; breathe.autoreverses = YES; breathe.repeatCount = HUGE_VALF;
+    breathe.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    [iv.layer addAnimation:breathe forKey:@"breathe"];
+    [hero addArrangedSubview:disc];
+  } else {
+    [hero addArrangedSubview:[[MUHeroView alloc] initWithSize:110]];
+  }
   NSTextField* title = [NSTextField labelWithString:@"iSlippi"];
   title.font = meleeFont(46); title.textColor = NSColor.whiteColor;
   title.wantsLayer = YES; title.layer.shadowColor = kYellow().CGColor; title.layer.shadowOpacity = 0.5; title.layer.shadowRadius = 14; title.layer.shadowOffset = CGSizeZero;
@@ -371,8 +507,8 @@ int display_max_hz(NSScreen* screen) {
   [hero setCustomSpacing:12 afterView:sub];
   return hero;
 }
-- (NSBox*)buildSteps {
-  NSBox* card = [self card];
+- (NSView*)buildSteps {
+  NSView* card = [self card];
   NSStackView* s = [self stackIn:card header:@"GET STARTED" symbol:@"flag.checkered"];
   NSArray* names = @[@"Choose your Melee disc image", @"Sign in to Slippi Online", @"Connect a controller (GameCube adapter, Bluetooth or USB pad, or keyboard)", @"Press Play"];
   NSMutableArray* labels = [NSMutableArray array]; NSMutableArray* icons = [NSMutableArray array];
@@ -387,8 +523,9 @@ int display_max_hz(NSScreen* screen) {
   self.stepLabels = labels; self.stepIcons = icons;
   return card;
 }
-- (NSBox*)buildRanked {
-  NSBox* card = [self card]; card.borderColor = rgb(0.97, 0.79, 0.28, 0.4);
+- (NSView*)buildRanked {
+  NSView* card = [self cardTinted:rgb(0.97, 0.79, 0.28, 0.12)];
+  if ([card isKindOfClass:NSBox.class]) ((NSBox*)card).borderColor = rgb(0.97, 0.79, 0.28, 0.4);
   NSStackView* s = [self stackIn:card header:@"RANKED" symbol:@"trophy"];
   NSStackView* top = [[NSStackView alloc] init]; top.orientation = NSUserInterfaceLayoutOrientationHorizontal; top.alignment = NSLayoutAttributeFirstBaseline;
   self.rankLabel = [NSTextField labelWithString:@""]; self.rankLabel.font = meleeFont(30); self.rankLabel.textColor = kYellow();
@@ -407,15 +544,15 @@ int display_max_hz(NSScreen* screen) {
   for (NSView* v in @[top, self.recordLabel, self.winTrack, self.placementLabel, self.mainsLabel]) [s addArrangedSubview:v];
   return card;
 }
-- (NSBox*)buildGames {
-  NSBox* card = [self card];
+- (NSView*)buildGames {
+  NSView* card = [self card];
   NSStackView* s = [self stackIn:card header:@"RECENT GAMES" symbol:@"clock.arrow.circlepath"];
   self.gamesStack = [[MUColumn alloc] init]; self.gamesStack.spacing = 7;
   [s addArrangedSubview:self.gamesStack];
   return card;
 }
-- (NSBox*)buildAccount {
-  NSBox* card = [self card];
+- (NSView*)buildAccount {
+  NSView* card = [self card];
   NSStackView* s = [self stackIn:card header:@"SLIPPI ONLINE ACCOUNT" symbol:@"person.crop.circle"];
   self.accountLabel = label(@"", 13, NSFontWeightRegular, 1);
   [s addArrangedSubview:self.accountLabel];
@@ -435,8 +572,8 @@ int display_max_hz(NSScreen* screen) {
   [s addArrangedSubview:out];
   return card;
 }
-- (NSBox*)buildDisc {
-  NSBox* card = [self card];
+- (NSView*)buildDisc {
+  NSView* card = [self card];
   NSStackView* s = [self stackIn:card header:@"GAME DISC" symbol:@"opticaldisc"];
   self.discName = label(@"", 16, NSFontWeightSemibold, 1);
   self.discHint = label(@"", 12, NSFontWeightRegular, 0.6);
@@ -445,16 +582,16 @@ int display_max_hz(NSScreen* screen) {
   [s addArrangedSubview:self.discName]; [s addArrangedSubview:self.discHint]; [s addArrangedSubview:buttons];
   return card;
 }
-- (NSBox*)buildControllers {
-  NSBox* card = [self card];
+- (NSView*)buildControllers {
+  NSView* card = [self card];
   NSStackView* s = [self stackIn:card header:@"CONTROLLERS" symbol:@"gamecontroller"];
   self.controllersStack = [[MUColumn alloc] init]; self.controllersStack.spacing = 8;
   [s addArrangedSubview:self.controllersStack];
   [s addArrangedSubview:label(@"A Wii U / Switch GameCube adapter (WUP-028) is read directly over USB with the exact polling the real game uses. Bluetooth and USB pads (PlayStation, Xbox, Switch Pro, MFi) pair through System Settings › Bluetooth or a cable. Assign each one a port and remap buttons here; the keyboard always works.", 11, NSFontWeightRegular, 0.6)];
   return card;
 }
-- (NSBox*)buildDisplay {
-  NSBox* card = [self card];
+- (NSView*)buildDisplay {
+  NSView* card = [self card];
   NSStackView* s = [self stackIn:card header:@"DISPLAY & PERFORMANCE" symbol:@"speedometer"];
   id<MTLDevice> gpu = MTLCreateSystemDefaultDevice();
   NSScreen* screen = NSScreen.mainScreen;
@@ -473,9 +610,13 @@ int display_max_hz(NSScreen* screen) {
   self.widescreenSwitch = [self toggle:self.settings->widescreen];
   [s addArrangedSubview:[self row:@"Widescreen (16:9)" symbol:@"rectangle.ratio.16.to.9" control:self.widescreenSwitch]];
   self.sharpness = [NSSlider sliderWithValue:self.settings->sharpness minValue:0 maxValue:1 target:nil action:nil];
-  [s addArrangedSubview:[self row:@"Sharpen" symbol:@"sparkles" control:self.sharpness]];
+  [s addArrangedSubview:[self sliderRow:@"Sharpen" symbol:@"sparkles" slider:self.sharpness format:@"%.0f%%" scale:100]];
   self.onlineSwitch = [self toggle:self.settings->online];
   [s addArrangedSubview:[self row:@"Slippi Online services" symbol:@"network" control:self.onlineSwitch]];
+  NSStackView* presetRow = [[NSStackView alloc] init]; presetRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; presetRow.spacing = 10; presetRow.alignment = NSLayoutAttributeCenterY;
+  [presetRow addArrangedSubview:[self button:@"Competitive preset" symbol:@"bolt.fill" action:@selector(applyCompetitivePreset)]];
+  [presetRow addArrangedSubview:label(@"Full screen, auto resolution, 16× filtering, display sync, 4:3, no sharpening: the tournament setup.", 11, NSFontWeightRegular, 0.6)];
+  [s addArrangedSubview:presetRow];
   return card;
 }
 
@@ -712,6 +853,11 @@ int display_max_hz(NSScreen* screen) {
   panel.title = @"Choose Disc Image"; panel.prompt = @"Choose"; panel.canChooseDirectories = NO; panel.allowsMultipleSelection = NO;
   if ([panel runModal] != NSModalResponseOK) return;
   [self acceptDroppedDisc:[NSString stringWithUTF8String:panel.URL.fileSystemRepresentation]];
+}
+- (void)applyCompetitivePreset {
+  self.scaleControl.selectedSegment = 0; self.anisoControl.selectedSegment = 2;
+  self.vsyncSwitch.state = NSControlStateValueOn; self.fullscreenSwitch.state = NSControlStateValueOn; self.widescreenSwitch.state = NSControlStateValueOff;
+  self.sharpness.doubleValue = 0; [self sliderChanged:self.sharpness];
 }
 - (void)play {
   const int scales[] = {0, 1, 2, 3, 4, 6, 8};

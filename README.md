@@ -8,9 +8,9 @@ No emulator. No Dolphin. The game itself, translated ahead of time into native A
 
 <sub>An unofficial, community client. Not affiliated with or endorsed by the Slippi team or Nintendo.</sub>
 
-<img src="docs/images/match-onett.jpg" width="820" alt="Fox versus Luigi on Onett, running natively on macOS with the Slippi delay indicator in the corner">
+<img src="docs/images/match-onett.jpg" width="820" alt="Yoshi versus Fox on Onett, running natively on macOS at four times the original resolution, with the Slippi delay indicator in the corner">
 
-<sub>Real capture from an Apple M5 Pro running macOS 27. Nothing from the game is included in this repository — you bring your own disc image.</sub>
+<sub>Real capture from an Apple M5 Pro running macOS 27, full screen at 4× internal resolution. Nothing from the game is included in this repository — you bring your own disc image.</sub>
 
 <br>
 
@@ -34,8 +34,9 @@ Melee has always been an emulated game on the Mac: a PowerPC console, simulated 
 - **It is a Mac app.** Metal rendering, native audio, your keyboard, any SDL-compatible controller, and the official GameCube adapter over USB.
 
 <div align="center">
-<img src="docs/images/online-play.jpg" width="400" alt="The Slippi Online Play menu">&nbsp;
-<img src="docs/images/character-select.jpg" width="400" alt="Character select with Fox and Luigi ready to fight">
+<img src="docs/images/character-select.jpg" width="400" alt="Character select, Yoshi and Fox ready to fight, UCF 0.84 in the corner">&nbsp;
+<img src="docs/images/stage-select.jpg" width="400" alt="Stage select">
+<br><sub>Character and stage select, full screen on a MacBook Pro. UCF and the Slippi netplay code are the real ones from the Slippi Launcher's game files.</sub>
 </div>
 
 ## Get playing
@@ -53,6 +54,10 @@ You need an Apple Silicon Mac (or an iPad, iPhone or Vision Pro), your own **Sup
 <img src="docs/images/ipad-launcher.jpg" width="300" alt="The same dashboard on iPad">
 <br><sub>The dashboard on macOS and iPad (shown with sample data). Ranked stats come from Slippi's profile API; recent games are read from your own replays.</sub>
 </div>
+
+### Design
+
+The app follows Apple's current design language. On macOS 26 and iOS 26 the dashboard is built from real Liquid Glass: `NSGlassEffectView` and `UIGlassEffect` cards inside a glass container (so neighbouring glass merges and renders in one pass), glass buttons with a prominent tinted Play, and a glass disc holding the Slippi mark. Older systems get the same layout on system materials. The app icon is an Icon Composer bundle (`port/app/icons/AppIcon.icon`) compiled by `actool`: the Slippi mark as a glass layer over the Slippi green, so macOS and iOS render it with the system's specular highlights, dark and tinted variants included. Melee's own visual grammar stays: the angled yellow section headers and italic display type are the game's menu style. Haptics are used sparingly (Play, sign-in result), sliders show their values, and the Mac has a real menu bar.
 
 ### The dashboard
 
@@ -123,8 +128,9 @@ Slippi is competitive, so the app uses what Apple devices offer for latency:
 This is an alpha. Expect rough edges, and please report them.
 
 <div align="center">
-<img src="docs/images/netplay-stadium.jpg" width="620" alt="An online match on Pokémon Stadium between two local instances">
-<br><sub>Two instances of the app in an online match against each other on one Mac.</sub>
+<img src="docs/images/netplay-stadium.jpg" width="400" alt="An online match on Pokémon Stadium between two local instances">&nbsp;
+<img src="docs/images/match-corneria.jpg" width="400" alt="Yoshi and Fox mid-air on Corneria">
+<br><sub>Left: two instances of the app in an online match against each other on one Mac. Right: Corneria at 4× resolution.</sub>
 </div>
 
 ## How it works
@@ -179,6 +185,8 @@ Use `-DCMAKE_OSX_SYSROOT=iphoneos` for a device (sign the bundle with your team)
 The upstream project, [Hero88go/melee-unlocked](https://github.com/Hero88go/melee-unlocked), is the Windows build with D3D12, DLSS and an unlocked display rate. This repository tracks it and adds the Apple platforms.
 
 ## Credits and legal
+
+The app icon and the dashboard mark use the Slippi logo from the [Slippi Launcher](https://github.com/project-slippi/slippi-launcher) (GPL-3.0). Slippi is a trademark of its authors; this is a community project and the logo is used to identify what the app connects to, not to claim affiliation. Design references: [dimillian/Skills](https://github.com/dimillian/Skills) (Liquid Glass, controls, haptics and review checklists), Apple's Liquid Glass documentation as collected in [xcode-27-system-prompts](https://github.com/artemnovichkov/xcode-27-system-prompts), and [PwrGit](https://github.com/pwrdrvr/PwrGit/pull/196) for the Icon Composer bundle layout.
 
 Built on the work of the [Slippi](https://slippi.gg) team, the [Dolphin](https://dolphin-emu.org) project, [SDL](https://libsdl.org), [Aurora](https://github.com/encounter/aurora) (build tooling and the diagnostic renderer), the [doldecomp/melee](https://github.com/doldecomp/melee) contributors, and [Hero88go/melee-unlocked](https://github.com/Hero88go/melee-unlocked). This project is not affiliated with or endorsed by the Slippi team, Nintendo or HAL Laboratory.
 

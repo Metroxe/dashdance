@@ -15,14 +15,24 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 sed "s/@VERSION@/$VERSION/g" "$ROOT/port/app/macos/Info.plist" > "$APP/Contents/Info.plist"
 cp "$EXE" "$APP/Contents/MacOS/iSlippi"
 cp -R "$ROOT/port/slippi_sys" "$APP/Contents/Resources/slippi_sys"
-# App icon from the 1024px master (drawn by tools/make_icons.py; no game assets).
-ICONSET="$(mktemp -d)/AppIcon.iconset"
-mkdir -p "$ICONSET"
-for size in 16 32 128 256 512; do
-  sips -z $size $size "$ROOT/port/app/icons/AppIcon-1024.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-  sips -z $((size*2)) $((size*2)) "$ROOT/port/app/icons/AppIcon-1024.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+cp "$ROOT/port/app/icons/AppIcon.icon/Assets/glyph.png" "$APP/Contents/Resources/SlippiMark.png"   # the hero mark in the dashboard
+# App icon: the Icon Composer bundle (Slippi mark as a glass layer over the Slippi green) compiled by
+# actool into Assets.car + AppIcon.icns, so macOS 26 renders it as Liquid Glass. Older toolchains fall
+# back to the flat 1024px master.
+if xcrun --find actool >/dev/null 2>&1 && xcrun actool "$ROOT/port/app/icons/AppIcon.icon" --compile "$APP/Contents/Resources" \
+     --output-format human-readable-text --warnings --errors --output-partial-info-plist "$(mktemp)" --app-icon AppIcon \
+     --include-all-app-icons --enable-on-demand-resources NO --development-region en --target-device mac \
+     --minimum-deployment-target 26.0 --platform macosx >/dev/null 2>&1 && [[ -f "$APP/Contents/Resources/AppIcon.icns" ]]; then
+  echo "icon: Icon Composer bundle compiled with actool"
+else
+  ICONSET="$(mktemp -d)/AppIcon.iconset"
+  mkdir -p "$ICONSET"
+  for size in 16 32 128 256 512; do
+    sips -z $size $size "$ROOT/port/app/icons/AppIcon-1024.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+    sips -z $((size*2)) $((size*2)) "$ROOT/port/app/icons/AppIcon-1024.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+fi
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 codesign --force --sign - --deep "$APP"
 codesign --verify --deep --strict "$APP"

@@ -453,10 +453,18 @@ static double g_sim_costs_window[SIM_COST_COUNT];   // accumulated over the 60-f
 static double g_sim_ms_window = 0, g_sim_ms_worst = 0;
 static const char* const g_sim_cost_names[SIM_COST_COUNT] = {"disc", "ax", "jukebox", "exi", "texsnap", "queue", "observe", "render", "texture", "pump", "gpuwait", "drawable"};
 static double g_sim_frame_start = 0.0, g_last_sim_ms = 0.0;
-void sim_cost_add(int slot, double seconds) { if (slot >= 0 && slot < SIM_COST_COUNT) { g_sim_costs[slot] += seconds; g_sim_costs_window[slot] += seconds; } }
+static std::thread::id g_sim_thread;                 // set by the first retrace; other threads (the renderer) report separately
+static double g_render_costs_window[SIM_COST_COUNT];
+static std::mutex g_render_costs_mutex;
+void sim_cost_add(int slot, double seconds) {
+  if (slot < 0 || slot >= SIM_COST_COUNT) return;
+  if (g_sim_thread == std::thread::id() || std::this_thread::get_id() == g_sim_thread) { g_sim_costs[slot] += seconds; g_sim_costs_window[slot] += seconds; return; }
+  std::lock_guard<std::mutex> lock(g_render_costs_mutex);
+  g_render_costs_window[slot] += seconds;
+}
 // "sim: 3.1 ms/frame (worst 12.4) | observe 0.9 texsnap 0.4" for the periodic frame log.
 static std::string sim_cost_line(uint32_t frames) {
-  char buf[320];
+  char buf[512];
   size_t n = (size_t)std::snprintf(buf, sizeof buf, "sim: %.1f ms/frame (worst %.1f)", g_sim_ms_window / std::max(1u, frames), g_sim_ms_worst);
   bool first = true;
   for (int i = 0; i < SIM_COST_COUNT; ++i) {
@@ -467,6 +475,17 @@ static std::string sim_cost_line(uint32_t frames) {
   }
   std::memset(g_sim_costs_window, 0, sizeof g_sim_costs_window);
   g_sim_ms_window = 0; g_sim_ms_worst = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_render_costs_mutex);
+    first = true;
+    for (int i = 0; i < SIM_COST_COUNT; ++i) {
+      double ms = g_render_costs_window[i] * 1000.0 / std::max(1u, frames);
+      if (ms < 0.05) continue;
+      n += (size_t)std::snprintf(buf + n, sizeof buf - n, "%s %s %.2f", first ? " | render thread:" : "", g_sim_cost_names[i], ms);
+      first = false;
+    }
+    std::memset(g_render_costs_window, 0, sizeof g_render_costs_window);
+  }
   return buf;
 }
 double last_sim_frame_ms() { return g_last_sim_ms; }
@@ -522,6 +541,7 @@ double phase_lock_total_ms() { return g_phase_total_ms; }
 
 void retrace() {
   struct Guard { Guard() { g_in_retrace = true; } ~Guard() { g_in_retrace = false; } } guard;
+  if (g_sim_thread == std::thread::id()) g_sim_thread = std::this_thread::get_id();
   ++g_retraces;
   {
     double now = now_seconds();

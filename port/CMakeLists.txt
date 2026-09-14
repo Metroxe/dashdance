@@ -368,6 +368,14 @@ if(MELEE_BUILD_PORT_METAL)
     else()
       set(MELEE_DEVICE_FAMILY "<integer>1</integer><integer>2</integer>")
     endif()
+    # Icon Composer bundles compile per platform; iOS gets the Liquid Glass icon, the others keep the PNG set.
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+      if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+        set(MELEE_APPLE_ACTOOL_PLATFORM iphonesimulator)
+      else()
+        set(MELEE_APPLE_ACTOOL_PLATFORM iphoneos)
+      endif()
+    endif()
   else()
     set(MELEE_DEVICE_TARGET OFF)
   endif()
@@ -502,11 +510,24 @@ if(MELEE_BUILD_PORT_METAL)
     # The Slippi Sys folder ships inside the bundle so the app is self-contained.
     add_custom_command(TARGET melee_port_mac POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/slippi_sys"
-      COMMAND ${CMAKE_COMMAND} -E copy
-        "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon60x60@2x.png" "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon60x60@3x.png"
-        "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon76x76@2x.png" "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon83.5x83.5@2x.png"
-        "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/"
+      COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon.icon/Assets/glyph.png" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/SlippiMark.png"
       VERBATIM)
+    if(MELEE_APPLE_ACTOOL_PLATFORM)
+      # Liquid Glass app icon: the Icon Composer bundle compiled by actool into Assets.car (+ fallback PNGs).
+      add_custom_command(TARGET melee_port_mac POST_BUILD
+        COMMAND xcrun actool "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon.icon" --compile "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>"
+          --output-format human-readable-text --warnings --errors --output-partial-info-plist "${CMAKE_CURRENT_BINARY_DIR}/AppIcon-partial.plist"
+          --app-icon AppIcon --include-all-app-icons --enable-on-demand-resources NO --development-region en
+          --target-device ipad --target-device iphone --minimum-deployment-target 26.0 --platform ${MELEE_APPLE_ACTOOL_PLATFORM}
+        VERBATIM)
+    else()
+      add_custom_command(TARGET melee_port_mac POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+          "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon60x60@2x.png" "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon60x60@3x.png"
+          "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon76x76@2x.png" "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon83.5x83.5@2x.png"
+          "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/"
+        VERBATIM)
+    endif()
   endif()
   target_link_libraries(melee_port_mac PRIVATE runtime_mac guest)
   target_compile_definitions(melee_port_mac PRIVATE MELEE_PORT_VERSION="${MELEE_PORT_VERSION}")

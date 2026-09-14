@@ -18,8 +18,38 @@
 
 namespace {
 UIColor* rgb(CGFloat r, CGFloat g, CGFloat b, CGFloat a = 1) { return [UIColor colorWithRed:r green:g blue:b alpha:a]; }
+// Theme: Melee's menu yellow on deep blue, Slippi green for the mark. One place for every colour.
 UIColor* kYellow() { return rgb(0.97, 0.79, 0.28); }
 UIColor* kRed() { return rgb(0.89, 0.27, 0.17); }
+UIColor* kSlippiGreen() { return rgb(0.18, 0.76, 0.42); }
+UIColor* kGlassTint() { return rgb(0.30, 0.40, 1.0, 0.10); }
+// Liquid Glass (iOS 26): glass cards and buttons; older systems get the material fallback.
+bool glass_available() {
+#if TARGET_OS_VISION
+  return false;
+#else
+  if (@available(iOS 26.0, *)) return true;
+  return false;
+#endif
+}
+// Haptics: one helper, fired next to the user action, never in a burst.
+void haptic_impact() {
+#if !TARGET_OS_VISION
+  UIImpactFeedbackGenerator* g = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium]; [g prepare]; [g impactOccurred];
+#endif
+}
+void haptic_notify(bool success) {
+#if !TARGET_OS_VISION
+  UINotificationFeedbackGenerator* g = [[UINotificationFeedbackGenerator alloc] init]; [g prepare]; [g notificationOccurred:success ? UINotificationFeedbackTypeSuccess : UINotificationFeedbackTypeError];
+#endif
+}
+// The Slippi mark ships in the bundle (SlippiMark.png, from the icon's glyph layer); MELEE_MARK points at it when running unbundled.
+UIImage* slippi_mark() {
+  NSString* path = [NSBundle.mainBundle pathForResource:@"SlippiMark" ofType:@"png"];
+  if (const char* env = std::getenv("MELEE_MARK")) path = [NSString stringWithUTF8String:env];
+  UIImage* image = path ? [UIImage imageWithContentsOfFile:path] : nil;
+  return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
 NSString* ns(const std::string& s) { return [NSString stringWithUTF8String:s.c_str()]; }
 UIFont* meleeFont(CGFloat size, UIFontWeight weight) {
   UIFont* base = [UIFont systemFontOfSize:size weight:weight];
@@ -138,6 +168,10 @@ int display_max_hz() {
 }
 @end
 
+@interface MULauncherController : UIViewController
++ (UIButtonConfiguration*)glassConfiguration:(BOOL)prominent;
+@end
+
 // ---- Remap sheet: press a button on the controller for each GameCube control
 @interface MURemapController : UIViewController
 @property(nonatomic) host::ControllerConfig config;
@@ -173,7 +207,7 @@ int display_max_hz() {
   [stack addArrangedSubview:title]; [stack addArrangedSubview:hint];
   self.rows = [NSMutableArray array];
   for (int i = 0; i < host::GC_CTL_COUNT; ++i) {
-    UIButtonConfiguration* c = [UIButtonConfiguration grayButtonConfiguration];
+    UIButtonConfiguration* c = [MULauncherController glassConfiguration:NO];
     c.cornerStyle = UIButtonConfigurationCornerStyleLarge; c.baseForegroundColor = UIColor.whiteColor;
     c.contentInsets = NSDirectionalEdgeInsetsMake(12, 16, 12, 16);
     UIButton* b = [UIButton buttonWithConfiguration:c primaryAction:nil];
@@ -183,13 +217,13 @@ int display_max_hz() {
   }
   UIStackView* actions = [[UIStackView alloc] init];
   actions.axis = UILayoutConstraintAxisHorizontal; actions.spacing = 12; actions.distribution = UIStackViewDistributionFillEqually;
-  UIButtonConfiguration* rc = [UIButtonConfiguration grayButtonConfiguration]; rc.title = @"Reset to default"; rc.cornerStyle = UIButtonConfigurationCornerStyleLarge;
+  UIButtonConfiguration* rc = [MULauncherController glassConfiguration:NO]; rc.title = @"Reset to default"; rc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
   UIButton* reset = [UIButton buttonWithConfiguration:rc primaryAction:nil];
   [reset addTarget:self action:@selector(resetMapping) forControlEvents:UIControlEventTouchUpInside];
-  UIButtonConfiguration* sc = [UIButtonConfiguration grayButtonConfiguration]; sc.title = @"Swap sticks"; sc.cornerStyle = UIButtonConfigurationCornerStyleLarge;
+  UIButtonConfiguration* sc = [MULauncherController glassConfiguration:NO]; sc.title = @"Swap sticks"; sc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
   UIButton* swap = [UIButton buttonWithConfiguration:sc primaryAction:nil];
   [swap addTarget:self action:@selector(swapSticks) forControlEvents:UIControlEventTouchUpInside];
-  UIButtonConfiguration* dc = [UIButtonConfiguration filledButtonConfiguration]; dc.title = @"Done"; dc.cornerStyle = UIButtonConfigurationCornerStyleLarge; dc.baseBackgroundColor = kYellow(); dc.baseForegroundColor = UIColor.blackColor;
+  UIButtonConfiguration* dc = [MULauncherController glassConfiguration:YES]; dc.title = @"Done"; dc.cornerStyle = UIButtonConfigurationCornerStyleCapsule; dc.baseBackgroundColor = kYellow(); dc.baseForegroundColor = UIColor.blackColor;
   UIButton* done = [UIButton buttonWithConfiguration:dc primaryAction:nil];
   [done addTarget:self action:@selector(finish) forControlEvents:UIControlEventTouchUpInside];
   [actions addArrangedSubview:reset]; [actions addArrangedSubview:swap]; [actions addArrangedSubview:done];
@@ -228,7 +262,7 @@ int display_max_hz() {
 @end
 
 // ---- Dashboard
-@interface MULauncherController : UIViewController <UIDocumentPickerDelegate, UITextFieldDelegate>
+@interface MULauncherController () <UIDocumentPickerDelegate, UITextFieldDelegate>
 @property(nonatomic) host::LauncherSettings* settings;
 @property(nonatomic) host::Dashboard dashboard;
 @property(nonatomic) BOOL done, playPressed, busy;
@@ -272,7 +306,20 @@ int display_max_hz() {
   [self.view addSubview:self.scroll];
   self.stack = [[UIStackView alloc] init];
   self.stack.axis = UILayoutConstraintAxisVertical; self.stack.spacing = 16; self.stack.translatesAutoresizingMaskIntoConstraints = NO;
-  [self.scroll addSubview:self.stack];
+  UIView* content = self.scroll;   // the stack's host: a glass container on iOS 26, so the cards render as one glass pass
+#if !TARGET_OS_VISION
+  if (@available(iOS 26.0, *)) {
+    UIGlassContainerEffect* container = [[UIGlassContainerEffect alloc] init];
+    container.spacing = 12;
+    UIVisualEffectView* cv = [[UIVisualEffectView alloc] initWithEffect:container];
+    cv.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.scroll addSubview:cv];
+    [NSLayoutConstraint activateConstraints:@[[cv.topAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.topAnchor], [cv.bottomAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.bottomAnchor],
+                                              [cv.leadingAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.leadingAnchor], [cv.trailingAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.trailingAnchor]]];
+    content = cv.contentView;
+  }
+#endif
+  [content addSubview:self.stack];
   [NSLayoutConstraint activateConstraints:@[
     [self.scroll.topAnchor constraintEqualToAnchor:self.view.topAnchor], [self.scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
     [self.scroll.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor], [self.scroll.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
@@ -326,11 +373,41 @@ int display_max_hz() {
 }
 
 // ---- building blocks
+// A card: Liquid Glass on iOS 26 (tinted toward the backdrop's blue, not interactive: cards are surfaces, buttons respond), material otherwise.
 - (UIView*)panel {
-  UIVisualEffectView* card = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+  UIVisualEffectView* card;
+#if !TARGET_OS_VISION
+  if (@available(iOS 26.0, *)) {
+    UIGlassEffect* glass = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
+    glass.tintColor = kGlassTint();
+    card = [[UIVisualEffectView alloc] initWithEffect:glass];
+    card.layer.cornerRadius = 22; card.layer.cornerCurve = kCACornerCurveContinuous; card.clipsToBounds = YES;
+    return card;
+  }
+#endif
+  card = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
   card.layer.cornerRadius = 18; card.layer.cornerCurve = kCACornerCurveContinuous; card.clipsToBounds = YES;
   card.layer.borderWidth = 1; card.layer.borderColor = rgb(0.5, 0.6, 1.0, 0.14).CGColor;
   return card;
+}
+// A circular glass disc for the hero mark (interactive: it reacts to touch like a control).
+- (UIView*)glassDisc:(CGFloat)size {
+  UIView* disc;
+#if !TARGET_OS_VISION
+  if (@available(iOS 26.0, *)) {
+    UIGlassEffect* glass = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
+    glass.tintColor = [kSlippiGreen() colorWithAlphaComponent:0.22]; glass.interactive = YES;
+    disc = [[UIVisualEffectView alloc] initWithEffect:glass];
+  } else
+#endif
+  {
+    disc = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    disc.layer.borderWidth = 1; disc.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.25].CGColor;
+  }
+  disc.translatesAutoresizingMaskIntoConstraints = NO;
+  [disc.widthAnchor constraintEqualToConstant:size].active = YES; [disc.heightAnchor constraintEqualToConstant:size].active = YES;
+  disc.layer.cornerRadius = size / 2; disc.clipsToBounds = YES;
+  return disc;
 }
 - (UIStackView*)stackIn:(UIView*)card {
   UIView* host = [card isKindOfClass:UIVisualEffectView.class] ? ((UIVisualEffectView*)card).contentView : card;
@@ -380,6 +457,19 @@ int display_max_hz() {
   l.text = text; l.font = [UIFont systemFontOfSize:size weight:weight]; l.textColor = [UIColor colorWithWhite:1 alpha:alpha]; l.numberOfLines = 0;
   return l;
 }
+// A slider with its value shown next to it, formatted by `format` (e.g. "%.0f%%" with scale 100).
+- (UIView*)sliderRow:(NSString*)text symbol:(NSString*)symbol slider:(UISlider*)slider format:(NSString*)format scale:(float)scale {
+  UILabel* value = [self label:@"" size:14 weight:UIFontWeightMedium alpha:0.7];
+  value.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium]; value.textAlignment = NSTextAlignmentRight;
+  [value.widthAnchor constraintEqualToConstant:52].active = YES;
+  void (^update)(void) = ^{ value.text = [NSString stringWithFormat:format, slider.value * scale]; };
+  [slider addAction:[UIAction actionWithHandler:^(UIAction*) { update(); }] forControlEvents:UIControlEventValueChanged];
+  update();
+  UIStackView* pair = [[UIStackView alloc] init]; pair.axis = UILayoutConstraintAxisHorizontal; pair.spacing = 8; pair.alignment = UIStackViewAlignmentCenter;
+  [pair addArrangedSubview:slider]; [pair addArrangedSubview:value];
+  [slider.widthAnchor constraintEqualToConstant:150].active = YES;
+  return [self row:text symbol:symbol control:pair];
+}
 - (UIView*)row:(NSString*)text symbol:(NSString*)symbol control:(UIView*)control {
   UIStackView* row = [[UIStackView alloc] init];
   row.axis = UILayoutConstraintAxisHorizontal; row.spacing = 12; row.alignment = UIStackViewAlignmentCenter;
@@ -393,15 +483,22 @@ int display_max_hz() {
   if ([control isKindOfClass:UISlider.class]) [control.widthAnchor constraintEqualToConstant:170].active = YES;
   return row;
 }
+// Buttons are glass on iOS 26 (prominent glass for Play, tinted Melee yellow); filled/gray otherwise.
++ (UIButtonConfiguration*)glassConfiguration:(BOOL)prominent {
+#if !TARGET_OS_VISION
+  if (@available(iOS 26.0, *)) return prominent ? [UIButtonConfiguration prominentGlassButtonConfiguration] : [UIButtonConfiguration glassButtonConfiguration];
+#endif
+  return prominent ? [UIButtonConfiguration filledButtonConfiguration] : [UIButtonConfiguration grayButtonConfiguration];
+}
 - (UIButton*)button:(NSString*)title symbol:(NSString*)symbol prominent:(BOOL)prominent {
-  UIButtonConfiguration* c = prominent ? [UIButtonConfiguration filledButtonConfiguration] : [UIButtonConfiguration grayButtonConfiguration];
-  c.title = title; c.cornerStyle = UIButtonConfigurationCornerStyleLarge; c.image = [UIImage systemImageNamed:symbol]; c.imagePadding = 8;
+  UIButtonConfiguration* c = [MULauncherController glassConfiguration:prominent];
+  c.title = title; c.cornerStyle = UIButtonConfigurationCornerStyleCapsule; c.image = [UIImage systemImageNamed:symbol]; c.imagePadding = 8;
   c.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightBold];
   c.contentInsets = NSDirectionalEdgeInsetsMake(prominent ? 18 : 12, 20, prominent ? 18 : 12, 20);
   if (prominent) { c.baseBackgroundColor = kYellow(); c.baseForegroundColor = rgb(0.1, 0.08, 0.02); } else c.baseForegroundColor = UIColor.whiteColor;
   UIButton* b = [UIButton buttonWithConfiguration:c primaryAction:nil];
   b.titleLabel.font = prominent ? meleeFont(22, UIFontWeightBold) : [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
-  if (prominent) { b.layer.shadowColor = kYellow().CGColor; b.layer.shadowOpacity = 0.45; b.layer.shadowRadius = 18; b.layer.shadowOffset = CGSizeMake(0, 6); }
+  if (prominent && !glass_available()) { b.layer.shadowColor = kYellow().CGColor; b.layer.shadowOpacity = 0.45; b.layer.shadowRadius = 18; b.layer.shadowOffset = CGSizeMake(0, 6); }
   return b;
 }
 - (UITextField*)field:(NSString*)placeholder symbol:(NSString*)symbol secure:(BOOL)secure {
@@ -428,7 +525,22 @@ int display_max_hz() {
 - (UIView*)buildHero {
   UIStackView* hero = [[UIStackView alloc] init];
   hero.axis = UILayoutConstraintAxisVertical; hero.alignment = UIStackViewAlignmentCenter; hero.spacing = 8;
-  [hero addArrangedSubview:[[MUHeroView alloc] initWithSize:120]];
+  if (UIImage* mark = slippi_mark()) {
+    UIView* disc = [self glassDisc:132];
+    UIImageView* iv = [[UIImageView alloc] initWithImage:mark];
+    iv.tintColor = UIColor.whiteColor; iv.contentMode = UIViewContentModeScaleAspectFit; iv.translatesAutoresizingMaskIntoConstraints = NO;
+    UIView* host = [disc isKindOfClass:UIVisualEffectView.class] ? ((UIVisualEffectView*)disc).contentView : disc;
+    [host addSubview:iv];
+    [NSLayoutConstraint activateConstraints:@[[iv.centerXAnchor constraintEqualToAnchor:host.centerXAnchor], [iv.centerYAnchor constraintEqualToAnchor:host.centerYAnchor],
+                                              [iv.widthAnchor constraintEqualToConstant:84], [iv.heightAnchor constraintEqualToConstant:84]]];
+    CABasicAnimation* breathe = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+    breathe.fromValue = @1.0; breathe.toValue = @1.05; breathe.duration = 2.4; breathe.autoreverses = YES; breathe.repeatCount = HUGE_VALF;
+    breathe.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    [iv.layer addAnimation:breathe forKey:@"breathe"];
+    [hero addArrangedSubview:disc];
+  } else {
+    [hero addArrangedSubview:[[MUHeroView alloc] initWithSize:120]];
+  }
   UILabel* title = [[UILabel alloc] init];
   title.text = @"iSlippi"; title.font = meleeFont(52, UIFontWeightBlack); title.textColor = UIColor.whiteColor;
   title.layer.shadowColor = kYellow().CGColor; title.layer.shadowOpacity = 0.5; title.layer.shadowRadius = 14; title.layer.shadowOffset = CGSizeZero;
@@ -559,9 +671,14 @@ int display_max_hz() {
   self.widescreenSwitch = [[UISwitch alloc] init]; self.widescreenSwitch.on = self.settings->widescreen; self.widescreenSwitch.onTintColor = kYellow();
   [s addArrangedSubview:[self row:@"Widescreen (16:9)" symbol:@"rectangle.ratio.16.to.9" control:self.widescreenSwitch]];
   self.sharpnessSlider = [[UISlider alloc] init]; self.sharpnessSlider.value = self.settings->sharpness; self.sharpnessSlider.tintColor = kYellow();
-  [s addArrangedSubview:[self row:@"Sharpen" symbol:@"sparkles" control:self.sharpnessSlider]];
+  [s addArrangedSubview:[self sliderRow:@"Sharpen" symbol:@"sparkles" slider:self.sharpnessSlider format:@"%.0f%%" scale:100]];
   self.onlineSwitch = [[UISwitch alloc] init]; self.onlineSwitch.on = self.settings->online; self.onlineSwitch.onTintColor = kYellow();
   [s addArrangedSubview:[self row:@"Slippi Online services" symbol:@"network" control:self.onlineSwitch]];
+  UIButton* preset = [self button:@"Competitive preset" symbol:@"bolt.fill" prominent:NO];
+  [preset addTarget:self action:@selector(applyCompetitivePreset) forControlEvents:UIControlEventTouchUpInside];
+  UIStackView* presetRow = [[UIStackView alloc] init]; presetRow.axis = UILayoutConstraintAxisHorizontal; presetRow.spacing = 12; presetRow.alignment = UIStackViewAlignmentCenter;
+  [presetRow addArrangedSubview:preset]; [presetRow addArrangedSubview:[self label:@"Auto resolution, 16× filtering, display sync on, 4:3, no sharpening: the tournament setup." size:12 weight:UIFontWeightRegular alpha:0.6]];
+  [s addArrangedSubview:presetRow];
   return card;
 }
 - (UIView*)buildTouch {
@@ -569,9 +686,9 @@ int display_max_hz() {
   UIStackView* s = [self stackIn:card];
   [s addArrangedSubview:[self header:@"ON-SCREEN CONTROLS" symbol:@"hand.tap"]];
   self.overlaySlider = [[UISlider alloc] init]; self.overlaySlider.value = self.settings->overlay_opacity; self.overlaySlider.tintColor = kYellow();
-  [s addArrangedSubview:[self row:@"Opacity" symbol:@"circle.lefthalf.filled" control:self.overlaySlider]];
+  [s addArrangedSubview:[self sliderRow:@"Opacity" symbol:@"circle.lefthalf.filled" slider:self.overlaySlider format:@"%.0f%%" scale:100]];
   self.overlayScaleSlider = [[UISlider alloc] init]; self.overlayScaleSlider.minimumValue = 0.7; self.overlayScaleSlider.maximumValue = 1.4; self.overlayScaleSlider.value = self.settings->overlay_scale; self.overlayScaleSlider.tintColor = kYellow();
-  [s addArrangedSubview:[self row:@"Size" symbol:@"arrow.up.left.and.arrow.down.right" control:self.overlayScaleSlider]];
+  [s addArrangedSubview:[self sliderRow:@"Size" symbol:@"arrow.up.left.and.arrow.down.right" slider:self.overlayScaleSlider format:@"%.2f×" scale:1]];
   return card;
 }
 
@@ -666,11 +783,11 @@ int display_max_hz() {
       if (p == pad.assigned_port) a.state = UIMenuElementStateOn;
       [ports addObject:a];
     }
-    UIButtonConfiguration* pc = [UIButtonConfiguration grayButtonConfiguration];
+    UIButtonConfiguration* pc = [MULauncherController glassConfiguration:NO];
     pc.title = pad.assigned_port ? [NSString stringWithFormat:@"Port %d", pad.assigned_port] : @"Auto"; pc.baseForegroundColor = UIColor.whiteColor; pc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
     UIButton* portButton = [UIButton buttonWithConfiguration:pc primaryAction:nil];
     portButton.menu = [UIMenu menuWithChildren:ports]; portButton.showsMenuAsPrimaryAction = YES;
-    UIButtonConfiguration* rc = [UIButtonConfiguration grayButtonConfiguration];
+    UIButtonConfiguration* rc = [MULauncherController glassConfiguration:NO];
     rc.title = @"Remap"; rc.image = [UIImage systemImageNamed:@"slider.horizontal.3"]; rc.imagePadding = 6; rc.baseForegroundColor = UIColor.whiteColor; rc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
     UIButton* remap = [UIButton buttonWithConfiguration:rc primaryAction:[UIAction actionWithHandler:^(UIAction*) {
       MURemapController* rm = [[MURemapController alloc] init];
@@ -748,7 +865,7 @@ int display_max_hz() {
     if (ok) slippi::login::write_session(dir, session);
     dispatch_async(dispatch_get_main_queue(), ^{
       MULauncherController* s = weakSelf; if (!s || s.done) return;
-      s.busy = NO;
+      s.busy = NO; haptic_notify(ok);
       if (ok) { s.passwordField.text = @""; s->_dashboard.name = account.display_name; s->_dashboard.code = account.connect_code; [s refreshAccount]; [s loadDashboard]; }
       else s.accountLabel.text = ns(error);
     });
@@ -786,7 +903,14 @@ int display_max_hz() {
   else { self.startupError = nil; self.settings->iso = std::string(dest.fileSystemRepresentation); }
   [self refreshDisc];
 }
+- (void)applyCompetitivePreset {
+  haptic_impact();
+  [self.scaleControl setSelectedSegmentIndex:0]; [self.anisoControl setSelectedSegmentIndex:2];
+  [self.vsyncSwitch setOn:YES animated:YES]; [self.widescreenSwitch setOn:NO animated:YES];
+  [self.sharpnessSlider setValue:0 animated:YES]; [self.sharpnessSlider sendActionsForControlEvents:UIControlEventValueChanged];
+}
 - (void)play {
+  haptic_impact();
   const int scales[] = {0, 1, 2, 3, 4, 6, 8};
   self.settings->scale = scales[MAX(0, MIN(6, self.scaleControl.selectedSegmentIndex))];
   self.settings->anisotropy = self.anisoControl.selectedSegmentIndex == 2 ? 16 : self.anisoControl.selectedSegmentIndex == 1 ? 4 : 1;
