@@ -15,7 +15,7 @@ for l in lines:
     if internal.search(l): continue
     l = re.sub(r"^\w+(\(.*?\))?:\s*", "", l).strip().rstrip(".")
     if l and l not in bullets: bullets.append(l[0].upper() + l[1:])
-print(f"## iSlippi {version}\n")
+print(f"## Dashdance {version}\n")
 print(f"Changes since {prev}:" if prev else "First release:")
 print()
 for b in bullets[:12]: print(f"- {b}")

@@ -299,7 +299,7 @@ bool send_game(Job& job) {
                   {"gameDurationFrames", g.duration_frames}, {"gameIndex", g.game_index}, {"tiebreakIndex", g.tiebreak_index}, {"winnerIdx", g.winner_index},
                   {"gameEndMethod", g.game_end_method}, {"lrasInitiator", g.lras_initiator}, {"stageId", g.stage_id}};
   json data = graphql("mutation ($report: OnlineGameReportInput!) { reportOnlineGame (report: $report) { success uploadUrl } }", {{"report", payload}});
-  bool success = !data.is_null() && data.count("reportOnlineGame") && data["reportOnlineGame"].value("success", false);
+  bool success = data.is_object() && data.count("reportOnlineGame") && data["reportOnlineGame"].is_object() && jget(data["reportOnlineGame"], "success", false);   // a null result must not crash after a game
   if (success) {
     host::log("slippi report: game %u of %s reported", g.game_index, g.match_id.c_str());
     auto& r = data["reportOnlineGame"];

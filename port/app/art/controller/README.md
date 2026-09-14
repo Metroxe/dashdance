@@ -12,5 +12,5 @@ from that file, unchanged except for being split into layers so the app can ligh
 
 All the layers share the SVG's canvas (3828 x 2689 units, rendered at 1600 px wide), so they stack without offsets. The
 controller editors (`port/runtime/host/gc_diagram.cpp`) place their highlights using coordinates measured in those units.
-Because this artwork is GPL-3.0, builds that include it are distributed under GPL-3.0 (the rest of iSlippi is
+Because this artwork is GPL-3.0, builds that include it are distributed under GPL-3.0 (the rest of Dashdance is
 GPL-2.0-or-later, which allows that).

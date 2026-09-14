@@ -1,20 +1,20 @@
-# iSlippi — guide for coding agents and new contributors
+# Dashdance — guide for coding agents and new contributors
 
-iSlippi is a native macOS / iPadOS / iOS / visionOS client for Super Smash Bros. Melee with Slippi
+Dashdance is a native macOS / iPadOS / iOS / visionOS client for Super Smash Bros. Melee with Slippi
 Online, built by statically recompiling the game's PowerPC code to C++ and running it on a host
 runtime with a Metal renderer. Read this file first; it tells you how the tree is laid out, how to
 build, and the rules that are not obvious from the code.
 
 ## One-command setup
 
-Players use `install.sh` (the one line in the README): it clones into ~/iSlippi, asks for the disc, runs `setup.sh`, copies the app to
+Players use `install.sh` (the one line in the README): it clones into ~/Dashdance, asks for the disc, runs `setup.sh`, copies the app to
 Applications and opens it. Developers call `setup.sh` directly:
 
 ```bash
-./setup.sh /path/to/melee.iso            # macOS app -> dist/iSlippi.app
+./setup.sh /path/to/melee.iso            # macOS app -> dist/Dashdance.app
 ./setup.sh /path/to/melee.iso --ios      # iPad/iPhone Simulator app (needs Xcode)
 ./setup.sh /path/to/melee.iso --visionos # Vision Pro Simulator app (needs Xcode)
-./setup.sh /path/to/melee.iso --device   # dist/iSlippi.ipa for AltStore/SideStore/Sideloadly; --team auto signs and installs over USB
+./setup.sh /path/to/melee.iso --device   # dist/Dashdance.ipa for AltStore/SideStore/Sideloadly; --team auto signs and installs over USB
 ```
 
 There is no store or public-release distribution and there must not be: the built app contains the
@@ -32,7 +32,7 @@ committed; the disc stays where it is.
 |---|---|
 | `port/app/main_mac.cpp` | The app entry point for all Apple platforms: options, launcher/dashboard, game loop start. |
 | `port/app/ios/`, `port/app/macos/` | Info.plist templates. |
-| `port/app/icons/AppIcon.icon` | Icon Composer bundle (Slippi mark as a glass layer). `tools/package_macos_app.sh` and CMake compile it with `actool`. |
+| `port/app/icons/AppIcon.icon` | Icon Composer bundle (Dashdance mark as a glass layer). `tools/package_macos_app.sh` and CMake compile it with `actool`. |
 | `port/runtime/host/` | Host services: window + input (`window_sdl.cpp`), dashboards (`mac_launcher.mm`, `ios_launcher.mm`), controller mapping, deadzones, trigger point, rumble and the keyboard layout (`input_config.*`), the Connect a Controller pairing steps (`controller_pairing.h`), the live GameCube controller in the controller editors (`gc_diagram.*`, drawing the GPL-3.0 ControllerOverlays artwork layers in `port/app/art/controller`; overlay coordinates are in the artwork's 3828 x 2689 units), dashboard model (`dashboard.*`), retrace/timing (`host.cpp`), touch overlay (`overlay.*`), GameCube adapter (`gc_adapter_iokit.cpp` on macOS: IOKit with a 1 ms pipe policy; `gc_adapter_libusb.cpp` elsewhere), controller report-rate measurement (`controller_rate.mm`), in-game menu and HUD (`game_menu.*`, drawn through the Metal overlay's glyph atlas), local notifications (`notify_apple.mm`). |
 | `port/runtime/gx/` | The GX (GameCube GPU) translation and the Metal renderer (`gx_metal.mm`, `gx_msl.cpp`). |
 | `port/runtime/hle/` | High-level emulation of the GameCube SDK the game calls (disc, pads, audio, memory cards) and Slippi's EXI device, login (`slippi_login.*`), replay parsing (`slippi_history.*`), Discord Rich Presence over the local IPC socket (`discord_rpc.*`). |
@@ -69,12 +69,12 @@ committed; the disc stays where it is.
   `MELEE_REALTIME=0`, `MELEE_METAL_SYNC_COMPILE=1` turn the render thread, real-time scheduling and
   background shader compilation off for A/B tests.
 - `MELEE_DASHBOARD_SAMPLE=1` fills the dashboard with sample data; `MELEE_LAUNCHER_SCROLL=<pt>` starts
-  it scrolled; `MELEE_MARK=<glyph.png>` shows the Slippi mark when running the bare binary.
+  it scrolled; `MELEE_MARK=<glyph.png>` shows the Dashdance mark when running the bare binary.
 - `MELEE_OPEN_EDITOR=keyboard` (or `pad:<guid>:<name>`) opens the dashboard's controller editor after launch (iOS takes `pad:` only); `MELEE_CONTROLLER_ART=<dir>` loads the controller artwork from another folder; `MELEE_OPEN_PAIRING=1` opens Connect a Controller; `MELEE_TEXT_AUDIT=1` logs every label, button or picker whose text is cut off, needs more lines than its box, leaves the window or runs into the rounded shape around it (`text-audit [...] done: N problems`; run it on each device and orientation after UI changes, and look at the screenshots too); `MELEE_ORIENTATION=portrait|landscape` rotates the iPhone/iPad dashboard (the game follows the device: rotate the Simulator with Command-arrow), `MELEE_WINDOW_SIZE=WxH` sizes the Vision Pro window and `MELEE_LAUNCHER_SIZE=WxH` the Mac dashboard window;
   `MELEE_MENU_PAGE=controls` or `remap` opens that page of the in-game menu together with `MELEE_MENU_OPEN` (screenshots).
 - `MELEE_MENU_OPEN=<retrace>` opens the in-game menu at that frame and `MELEE_HUD=1` turns the HUD on (screenshots);
   `MELEE_DUMP_GLYPHS=<file.pgm>` writes the text atlas; `MELEE_DISCORD_APP_ID=<id>` points Discord presence at another application (the built-in id,
-  `slippi::discord::kApplicationId`, is iSlippi's own from slippi-rust-extensions PR 36, with its character, stage and rank artwork).
+  `slippi::discord::kApplicationId`, is Dashdance's own from slippi-rust-extensions PR 36, with its character, stage and rank artwork).
 - `MELEE_PAD_FILE=<file>` drives the game from a text file (one line per pad: `p=1 A sx=127`), which
   is how the scripted match tests work without a window in focus.
 - On the Simulator, prefix environment variables with `SIMCTL_CHILD_` and pass them to

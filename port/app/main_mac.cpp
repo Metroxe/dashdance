@@ -67,7 +67,7 @@ void usage() {
       "  --netplay-port N         fixed local UDP port for netplay\n"
       "  --local-peer i:port:ip:port  peer two local instances directly (testing)\n"
       "  --sys-dir DIR            Slippi Sys folder (code tables, GameFiles)\n"
-      "  --replay-dir DIR         .slp output (default ~/Library/Application Support/iSlippi/Replays)\n"
+      "  --replay-dir DIR         .slp output (default ~/Library/Application Support/Dashdance/Replays)\n"
       "  --card-dir DIR           memory card A folder of .gci files\n"
       "  --profile-dir DIR        app profile root (settings, Aurora preferences)\n"
       "  --cache-dir DIR          pipeline cache and ISO hash cache\n"
@@ -207,8 +207,8 @@ int main(int argc, char** argv) {
   }
   if (iso_arg.empty()) { if (const char* env = std::getenv("MELEE_ISO")) iso_arg = env; }
 
-  const fs::path support = fs::path(home_dir()) / "Library/Application Support/iSlippi";
-  for (const char* old_name : {"Shine", "MeleeUnlocked"}) {   // carry settings, saves and replays over from earlier names
+  const fs::path support = fs::path(home_dir()) / "Library/Application Support/Dashdance";
+  for (const char* old_name : {"iSlippi", "Shine", "MeleeUnlocked"}) {   // carry settings, saves and replays over from earlier names
     std::error_code ec;
     const fs::path previous = fs::path(home_dir()) / "Library/Application Support" / old_name;
     if (fs::is_directory(previous, ec) && !fs::exists(support, ec)) fs::rename(previous, support, ec);
@@ -323,7 +323,7 @@ int main(int argc, char** argv) {
   if (!script.empty() && !host::input_load_script(script.c_str())) { std::fprintf(stderr, "cannot load input script %s\n", script.c_str()); return 2; }
   ppc::set_interpreter_allowed(allow_interpreter);
 
-  host::log("iSlippi %s: Apple Metal frontend", MELEE_PORT_VERSION);
+  host::log("Dashdance %s: Apple Metal frontend", MELEE_PORT_VERSION);
   host::log("paths: iso=%s sys=%s profile=%s replays=%s cache=%s", o.iso.c_str(), o.sys_dir.c_str(), profile_dir.c_str(), replay_dir.c_str(), cache_dir.c_str());
   host::simulation_thread_realtime();   // Mach time-constraint policy: a 16.7 ms period the scheduler must honour (MELEE_REALTIME=0 disables)
   host::power_play_begin();             // latency-critical activity, no display sleep, thermal-state log
@@ -332,7 +332,7 @@ int main(int argc, char** argv) {
   if (!host::disc_open(o.iso)) {
     host::log("cannot open disc image %s", o.iso.c_str());
     std::fprintf(stderr, "cannot open ISO %s\n", o.iso.c_str());
-    host::mac_show_error("Could not load this disc image", "iSlippi needs an unmodified Super Smash Bros. Melee NTSC 1.02 image.\n\n" + o.iso);
+    host::mac_show_error("Could not load this disc image", "Dashdance needs an unmodified Super Smash Bros. Melee NTSC 1.02 image.\n\n" + o.iso);
     return 1;
   }
 
@@ -341,7 +341,7 @@ int main(int argc, char** argv) {
   bool audio_opened = false;
   int code = 0;
   try {
-    void* layer = host::window_create((int)window_w, (int)window_h, L"iSlippi", true);
+    void* layer = host::window_create((int)window_w, (int)window_h, L"Dashdance", true);
     int client_w = 0, client_h = 0;
     host::window_client_size(&client_w, &client_h);
     gfx.cache_dir = cache_dir;

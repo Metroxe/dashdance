@@ -510,10 +510,10 @@ if(MELEE_BUILD_PORT_METAL)
   add_executable(melee_port_mac app/main_mac.cpp)
   if(MELEE_DEVICE_TARGET)
     set_target_properties(melee_port_mac PROPERTIES
-      MACOSX_BUNDLE TRUE OUTPUT_NAME "iSlippi"
+      MACOSX_BUNDLE TRUE OUTPUT_NAME "Dashdance"
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/app/ios/Info.plist.in"
       MACOSX_BUNDLE_GUI_IDENTIFIER "${MELEE_IOS_BUNDLE_ID}"
-      MACOSX_BUNDLE_BUNDLE_NAME "iSlippi"
+      MACOSX_BUNDLE_BUNDLE_NAME "Dashdance"
       MACOSX_BUNDLE_BUNDLE_VERSION "${MELEE_PORT_VERSION}"
       MACOSX_BUNDLE_SHORT_VERSION_STRING "${MELEE_PORT_VERSION}"
       XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2,7"
@@ -530,7 +530,7 @@ if(MELEE_BUILD_PORT_METAL)
     # The Slippi Sys folder ships inside the bundle so the app is self-contained.
     add_custom_command(TARGET melee_port_mac POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/slippi_sys"
-      COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon.icon/Assets/glyph.png" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/SlippiMark.png"
+      COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon.icon/Assets/glyph.png" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/AppMark.png"
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/app/art/controller" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/controller"
       VERBATIM)
     if(MELEE_APPLE_ACTOOL_PLATFORM)

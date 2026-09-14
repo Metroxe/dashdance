@@ -1,4 +1,4 @@
-# iSlippi technical guide
+# Dashdance technical guide
 
 The [README](../README.md) is the short version for players. This is everything underneath: how the app is built,
 what it does for latency and why, the controller and adapter details, device builds and sideloading, and how to build
@@ -39,7 +39,7 @@ What the app does, and what only the player can change:
 | **Ready to compete** | A dashboard card (Mac, iPhone, iPad, Vision Pro) checks the live setup once a second and says, in plain words, what costs latency: display refresh, full screen on the Mac, Low Power Mode, wired versus Wi-Fi versus mobile data (Network framework path monitor), the controller type and its measured report rate, Bluetooth audio, the online delay and heat. The same list is logged as `readiness:` lines when a match starts. |
 | **Network threads** | The netplay thread runs at user-interactive QoS and the matchmaking thread at user-initiated, set explicitly, so opponent inputs are handled on performance cores; outgoing pads wake the ENet thread immediately. |
 | **Rollback cost** | Save-state capture and load are timed as `savestate` in the frame-timing log, so rollback bookkeeping on a phone is visible next to everything else. |
-| **Phase lock stays off** | Measured on an M5 Pro in a scripted match: frame-to-panel latency averaged 3.74 ms with the display phase lock off and 3.69 ms with it on, zero late frames either way. That is noise, so `MELEE_PHASE_LOCK` remains an experiment. |
+| **Phase lock stays off** | Measured on an M5 Pro in a scripted match: frame-to-panel latency averaged 3.74 ms with the display phase lock off and 3.69 ms with it on, and no simulation frame ran past its 16.7 ms budget either way. That is noise, so `MELEE_PHASE_LOCK` remains an experiment. |
 | **Vision Pro** | The system composites every window at the headset's fixed refresh rate, so there is no refresh to raise; the delay setting, controller and resolution choices still apply. |
 
 None of this has been measured on a physical iPhone, iPad or Vision Pro yet: the Simulator runs on the Mac's GPU at 60 Hz and has no presented-time API. On a device, `MELEE_METAL_LATENCY=1` logs frame-to-panel time.
@@ -62,7 +62,7 @@ Melee has always been an emulated game on the Mac: a PowerPC console, simulated 
 
 One command builds and opens the Mac app. It installs the tools it needs, fetches the game's symbol
 tables from the open-source decompilation, pulls `main.dol` out of your own disc image and packages
-`dist/iSlippi.app`:
+`dist/Dashdance.app`:
 
 ```bash
 git clone https://github.com/TheAndersMadsen/islippi.git && cd islippi
@@ -79,25 +79,20 @@ diagnostics.
 You need an Apple Silicon Mac (or an iPad, iPhone or Vision Pro), your own **Super Smash Bros. Melee NTSC 1.02** disc image (`.iso` or `.gcm`), and a free [Slippi account](https://slippi.gg) for online play.
 
 1. **Build the app** (about ten minutes the first time — see [Build from source](#build-from-source)).
-2. **Open iSlippi.** The dashboard walks you through it: choose your disc image (on iPad and iPhone, import it or drop it into the app's folder in Files). The app remembers it.
+2. **Open Dashdance.** The dashboard walks you through it: choose your disc image (on iPad and iPhone, import it or drop it into the app's folder in Files). The app remembers it.
 3. **Sign in to Slippi** right there — email and password, no separate app. You stay signed in, and the dashboard shows your ranked tier, rating, record, daily placement, most-played characters and your recent games.
 4. **Play.**
 
 <div align="center">
-<img src="images/mac-launcher.jpg" width="420" alt="The macOS dashboard: ranked profile, recent games, Slippi account, disc, controllers and display settings">
+<img src="images/mac-dashboard.jpg" width="520" alt="The macOS dashboard: ranked profile, recent games, Slippi account, disc, controllers and display settings">
 &nbsp;&nbsp;
-<img src="images/ipad-launcher.jpg" width="300" alt="The same dashboard on iPad">
+<img src="images/ipad-dashboard.jpg" width="240" alt="The same dashboard on iPad">
 <br><sub>The dashboard on macOS and iPad (shown with sample data). Ranked stats come from Slippi's profile API; recent games are read from your own replays.</sub>
-</div>
-
-<div align="center">
-<img src="images/mac-menubar.jpg" width="460" alt="The macOS menu bar extra: rank, rating, record, mains, recent games, Play, Show iSlippi, Sign Out, Quit">
-<br><sub>On the Mac the Slippi mark sits in the menu bar with your rank; its menu has your stats and the actions that matter, even mid-game.</sub>
 </div>
 
 ### Design
 
-The app follows Apple's current design language. On macOS 26 and iOS 26 the dashboard is built from real Liquid Glass: `NSGlassEffectView` and `UIGlassEffect` cards inside a glass container (so neighbouring glass merges and renders in one pass), glass buttons with a prominent tinted Play, and a glass disc holding the Slippi mark. Older systems get the same layout on system materials. The app icon is an Icon Composer bundle (`port/app/icons/AppIcon.icon`) compiled by `actool`: the Slippi mark as a glass layer over the Slippi green, so macOS and iOS render it with the system's specular highlights, dark and tinted variants included. Melee's own visual grammar stays: the angled yellow section headers and italic display type are the game's menu style. Haptics are used sparingly (Play, sign-in result), sliders show their values, and the Mac has a real menu bar. Every screen adapts to its space: on a wide Mac window, an iPad in landscape, a 13-inch iPad or a Vision Pro window the dashboard's cards sit in two columns, phones keep one column in portrait and landscape, the controller editor puts the controller next to its settings when there is room, and the touch controls, performance HUD and in-game menu stay clear of the Dynamic Island, rounded corners and home indicator.
+The app follows Apple's current design language. On macOS 26 and iOS 26 the dashboard is built from real Liquid Glass: `NSGlassEffectView` and `UIGlassEffect` cards inside a glass container (so neighbouring glass merges and renders in one pass), glass buttons with a prominent tinted Play, and a glass disc holding the Dashdance mark. Older systems get the same layout on system materials. The app icon is an Icon Composer bundle (`port/app/icons/AppIcon.icon`) compiled by `actool`: the Dashdance mark (an italic D with speed lines, `port/app/icons/dashdance_mark.svg`) as a glass layer over a violet gradient, so macOS and iOS render it with the system's specular highlights, dark and tinted variants included. Melee's own visual grammar stays: the angled yellow section headers and italic display type are the game's menu style. Haptics are used sparingly (Play, sign-in result), sliders show their values, and the Mac has a real menu bar. Every screen adapts to its space: on a wide Mac window, an iPad in landscape, a 13-inch iPad or a Vision Pro window the dashboard's cards sit in two columns, phones keep one column in portrait and landscape, the controller editor puts the controller next to its settings when there is room, and the touch controls, performance HUD and in-game menu stay clear of the Dynamic Island, rounded corners and home indicator.
 
 ### The dashboard
 
@@ -111,14 +106,14 @@ The app follows Apple's current design language. On macOS 26 and iOS 26 the dash
 | **Controllers** | Every connected controller and the keyboard, each controller's GameCube port (auto or fixed 1–4), a Configure button that opens the controller editor, and Connect a Controller, which walks you through Bluetooth pairing (below). Settings are saved per controller. |
 | **Display & performance** | Internal resolution (auto picks the display), anisotropic filtering, display sync, widescreen, sharpening, full screen on macOS, plus the GPU and the display's refresh rate so you can see what the app is running on. |
 | **On-screen controls** (iPad, iPhone) | Opacity and size of the touch controller. |
-| **Menu bar extra** (Mac) | The Slippi mark in the menu bar with your rank next to it. The menu shows rating, record, placement, mains and your recent games, and has Play, Show iSlippi, Sign Out and Quit, from anywhere, including while a game is running. |
+| **Menu bar extra** (Mac) | The Dashdance mark in the menu bar with your rank next to it. The menu shows rating, record, placement, mains and your recent games, and has Play, Show Dashdance, Sign Out and Quit, from anywhere, including while a game is running. |
 
 ### In-game menu and HUD
 
-Like the decomp ports (Ship of Harkinian and friends), iSlippi has a settings overlay inside the game. Hold **L + R + Start** for half a second on any controller, press **F1** or **Escape** on the keyboard, or tap the **MENU** button next to the touch controls. The game receives neutral inputs while it is up. Everything applies immediately and is remembered: internal resolution, anisotropic filtering, sharpening, display sync and full screen (Mac), volume, touch-control opacity and size (iPad, iPhone), widescreen (next launch) and a performance HUD. The HUD is one line in the corner: simulation time per frame, display refresh, late-frame count and the GameCube adapter's polling rate, the same numbers the measurement scripts use. The text is drawn by the Metal renderer from a CoreText glyph atlas, so it costs one extra draw.
+Like the decomp ports (Ship of Harkinian and friends), Dashdance has a settings overlay inside the game. Hold **L + R + Start** for half a second on any controller, press **F1** or **Escape** on the keyboard, or tap the **MENU** button next to the touch controls. The game receives neutral inputs while it is up. Everything applies immediately and is remembered: internal resolution, anisotropic filtering, sharpening, display sync and full screen (Mac), volume, touch-control opacity and size (iPad, iPhone), widescreen (next launch) and a performance HUD. The HUD is one line in the corner: simulation time per frame, display refresh, late-frame count and the GameCube adapter's polling rate, the same numbers the measurement scripts use. The text is drawn by the Metal renderer from a CoreText glyph atlas, so it costs one extra draw.
 
 <div align="center">
-<img src="images/ingame-menu.jpg" width="620" alt="The in-game settings menu open over a match on Icicle Mountain">
+<img src="images/store/banner-mac-menu.jpg" width="720" alt="The in-game settings menu open over a match">
 <br><sub>The in-game menu over a match on macOS; the game underneath receives neutral inputs until you resume.</sub>
 </div>
 
@@ -160,23 +155,23 @@ Any controller SDL recognises works out of the box, over Bluetooth or a cable: P
 
 This is how Slippi players connect a real GameCube controller everywhere: the Nintendo Wii U / Switch GameCube Controller Adapter (WUP-028), or a Mayflash 4-port adapter with its switch in "Wii U" mode, plugged into USB (a USB-C to USB-A adapter or hub on a modern Mac). The app reads it directly, the way Dolphin's native adapter mode does, and it takes priority on the ports that have controllers plugged in.
 
-The catch every competitive player knows: the adapter's USB descriptor asks for an 8 ms polling interval, 125 Hz, which adds up to 8 ms of input latency. On Linux the fix is a kernel module ([gcadapter-oc-kmod](https://github.com/HannesMann/gcadapter-oc-kmod)) that rewrites the interval to 1 ms; on Windows a WinUSB driver and a patched Dolphin; on macOS it used to need a kernel extension ([GCAdapterDriver](https://github.com/secretkeysio/GCAdapterDriver)) and, since Big Sur, [a Recovery-mode change to system security](https://github.com/project-slippi/Ishiiruka/wiki/Overclocking-Controllers-on-macOS-Big-Sur,-Monterey,-Ventura,-or-Sonoma). iSlippi does it in-process: it opens the adapter through IOKit and asks the USB host controller for a 1 ms interval with `SetPipePolicy`, no driver, no security change, no libusb. The dashboard shows the rate the port actually delivers, measured from the report stream; if it says 125 Hz, that USB port or hub refused the request and another one usually accepts it (the same advice the Slippi Mac FAQ gives). `MELEE_ADAPTER_INTERVAL_MS=2` asks for 500 Hz if an adapter drops inputs at 1000.
+The catch every competitive player knows: the adapter's USB descriptor asks for an 8 ms polling interval, 125 Hz, which adds up to 8 ms of input latency. On Linux the fix is a kernel module ([gcadapter-oc-kmod](https://github.com/HannesMann/gcadapter-oc-kmod)) that rewrites the interval to 1 ms; on Windows a WinUSB driver and a patched Dolphin; on macOS it used to need a kernel extension ([GCAdapterDriver](https://github.com/secretkeysio/GCAdapterDriver)) and, since Big Sur, [a Recovery-mode change to system security](https://github.com/project-slippi/Ishiiruka/wiki/Overclocking-Controllers-on-macOS-Big-Sur,-Monterey,-Ventura,-or-Sonoma). Dashdance does it in-process: it opens the adapter through IOKit and asks the USB host controller for a 1 ms interval with `SetPipePolicy`, no driver, no security change, no libusb. The dashboard shows the rate the port actually delivers, measured from the report stream; if it says 125 Hz, that USB port or hub refused the request and another one usually accepts it (the same advice the Slippi Mac FAQ gives). `MELEE_ADAPTER_INTERVAL_MS=2` asks for 500 Hz if an adapter drops inputs at 1000.
 
 iPadOS and iOS do not give apps raw USB access, so the adapter is a Mac feature; on an iPhone or iPad a Bluetooth or USB-C pad is the way to play with a physical controller.
 
 ### iPhone and iPad (your own device)
 
-iSlippi cannot be on the App Store or an EU marketplace: the app contains the translated game code, which
+Dashdance cannot be on the App Store or an EU marketplace: the app contains the translated game code, which
 only you may have, from your own disc. It can be on your own device, and that is one command:
 
 ```bash
 ./setup.sh /path/to/melee.iso --device
 ```
 
-That produces `dist/iSlippi.ipa`. Open it in [AltStore](https://altstore.io), [SideStore](https://sidestore.io)
+That produces `dist/Dashdance.ipa`. Open it in [AltStore](https://altstore.io), [SideStore](https://sidestore.io)
 or [Sideloadly](https://sideloadly.io), sign in with your Apple ID, and it installs (a free Apple ID re-signs
 every 7 days; a paid developer account lasts a year). Copy your disc image into the app's folder in the Files
-app, or from Finder (your device › Files › iSlippi).
+app, or from Finder (your device › Files › Dashdance).
 
 Prefer USB and your own certificate? `./setup.sh /path/to/melee.iso --device --team auto` signs with the
 Apple Development identity Xcode created for your Apple ID and installs on the connected device
@@ -185,7 +180,7 @@ Security › Developer Mode and trust your certificate under Settings › Genera
 
 ### On iPhone
 
-iSlippi runs on iPhone the same way as on iPad, with two phone-specific rules. The internal resolution is capped at 2× (1280×1056) because a phone has the least thermal headroom, and when iOS reports serious or critical heat the game drops to 2× and then 1× automatically so the frame rate holds instead of the resolution (the change is logged, and the cap lifts when the phone cools). Pro models run the 120 Hz display path (`CADisableMinimumFrameDurationOnPhone`); other models present at 60 Hz.
+Dashdance runs on iPhone the same way as on iPad, with two phone-specific rules. The internal resolution is capped at 2× (1280×1056) because a phone has the least thermal headroom, and when iOS reports serious or critical heat the game drops to 2× and then 1× automatically so the frame rate holds instead of the resolution (the change is logged, and the cap lifts when the phone cools). Pro models run the 120 Hz display path (`CADisableMinimumFrameDurationOnPhone`); other models present at 60 Hz.
 
 Controllers: iPhone 15 and later accept USB-C pads (PlayStation, Xbox, Switch Pro, MFi) through the GameController framework, and every model pairs them over Bluetooth. iOS decides the HID polling rate; the app cannot set 1000 Hz on a phone, but it measures what the connection delivers and shows it in the Controllers card, and it samples the latest state right before each game frame. A Lightning iPhone takes MFi controllers only. None of this has been measured on a physical phone yet, only in the Simulator, which runs on the Mac's GPU.
 
@@ -210,7 +205,7 @@ Your Discord status follows the game, using the Discord application and artwork 
 | In a game | The stage as the picture, your character as the badge, "Ranked - Game 2" and the live stock line "YOU 3 - 2 THEM", with a match timer |
 | After a game | "Ranked - Game 2 - Set 1-1 · YOU vs THEM - Game over" |
 
-Everyone who sees it gets a "Get Slippi" button and a "View Slippi Profile" link to your slippi.gg page. It talks to the Discord desktop app over its local socket: no login inside iSlippi, and nothing happens when Discord is not running. The Discord card on the dashboard turns it off or hides your rank. Menus, queue and opponent come from matchmaking; stage, characters, stocks and set score come from the replay event stream, never from game memory.
+Everyone who sees it gets a "Get Slippi" button and a "View Slippi Profile" link to your slippi.gg page. It talks to the Discord desktop app over its local socket: no login inside Dashdance, and nothing happens when Discord is not running. The Discord card on the dashboard turns it off or hides your rank. Menus, queue and opponent come from matchmaking; stage, characters, stocks and set score come from the replay event stream, never from game memory.
 
 ### Matchmaking region
 
@@ -218,7 +213,7 @@ Slippi's matchmaking places you by the region of your public IPv4 address, using
 
 ### Notifications, and what Slippi's servers can and cannot do
 
-There are no game invites in Slippi. The matchmaking server takes a ticket (`create-ticket` with your uid, play key, connect code, mode and, for Direct, the friend's code) and pairs it with a matching ticket; nobody is notified that a friend is looking for them, and the launcher's "notifications" are in-app toasts. The GraphQL API exposes your profile, ranked stats, chat messages and a few mutations, no presence, friends or subscriptions. So real push invites cannot be built on top of Slippi, and iSlippi does not pretend to. What it does: on the Mac, when a match is found while the app is not in front, it posts a system notification ("Match found: vs NAME (CODE), Ranked") so you can tab back in time. On iPhone and iPad the game cannot keep searching in the background, so there is nothing to notify.
+There are no game invites in Slippi. The matchmaking server takes a ticket (`create-ticket` with your uid, play key, connect code, mode and, for Direct, the friend's code) and pairs it with a matching ticket; nobody is notified that a friend is looking for them, and the launcher's "notifications" are in-app toasts. The GraphQL API exposes your profile, ranked stats, chat messages and a few mutations, no presence, friends or subscriptions. So real push invites cannot be built on top of Slippi, and Dashdance does not pretend to. What it does: on the Mac, when a match is found while the app is not in front, it posts a system notification ("Match found: vs NAME (CODE), Ranked") so you can tab back in time. On iPhone and iPad the game cannot keep searching in the background, so there is nothing to notify.
 
 ### Built for the hardware
 
@@ -237,7 +232,7 @@ Slippi is competitive, so the app uses what Apple devices offer for latency:
 | **Audio kept short** | A 256-frame CoreAudio buffer plus a 20 ms ring: about 26 ms from the game producing a sound to the speaker, measured underrun-free. `MELEE_AUDIO_SLACK_MS` and `MELEE_AUDIO_FRAMES` adjust it; underruns are logged as they happen. |
 | **Internal resolution is the latency knob** | Measured in full screen on an M5 Pro: 1× costs 1.8 ms of GPU and 4 ms XFB-to-panel, 2× 2.6 ms and 4.6 ms, 4× 4.6 ms and about 7 ms. Anisotropic filtering is free. The competitive preset picks 2×. |
 | **Shaders tuned for Apple GPUs** | The GameCube's integer colour combiners are emulated exactly; the surrounding float math compiles with Metal fast math (26% less GPU time, pixel-identical on deterministic captures). |
-| **Measured latency** | With the game's own instrumentation (`MELEE_METAL_LATENCY=1` logs XFB-copy-to-panel time from Metal's presented timestamps): about 10 ms in full screen on a 120 Hz MacBook Pro, about 25 ms in a window, because a window costs one compositor frame. Full screen is the default; ⌥⏎ toggles. The simulation itself takes about 4 ms of each 16.7 ms frame on an M5 Pro, GPU work 5–8 ms, render encoding about 1 ms. |
+| **Measured latency** | `MELEE_METAL_LATENCY=1` logs XFB-copy-to-panel time: from the game finishing a frame (its XFB copy) to Metal's `presentedTime` for the drawable that shows it. That span is render-thread encoding, GPU work, the wait for the display's next refresh and, in a window, the compositor; it is neither the render time nor the refresh interval. It depends on the machine, the display's refresh rate and the window mode, so the numbers here are examples from one Mac, not promises: on an M5 Pro MacBook Pro's 120 Hz built-in display the scripted match averaged about 10 ms in full screen and about 25 ms in a window when the render thread landed, and a later windowed run on the same Mac averaged 3.7 ms. ⌥⏎ toggles full screen. |
 | **Render thread** | The simulation hands each frame to a queue and never waits for the GPU or the display. Measured on a ProMotion MacBook Pro: Metal's `nextDrawable` can block for 15–30 ms when the display pipeline holds both drawables, and with rendering on the game thread that was a dropped game frame every time (up to 80 late frames a minute). With the render thread: zero late frames in a minute of play, and the stall costs only a shown frame. |
 | **Shaders never stall the game** | The first time a stage, character or effect is seen its Metal pipeline is compiled in the background and the draw is skipped for a frame or two instead of freezing the game (28 new shaders once cost 742 ms on the render path). Every pipeline ever used is written to `pipelines.bin` in the cache folder and compiled again at the next launch while the game boots, so a stage seen once never even flickers. |
 | **Real-time simulation thread** | The simulation thread asks the kernel for a time-constraint (real-time) policy with a 16.7 ms period, so background work cannot push a frame past its deadline. `MELEE_REALTIME=0` turns it off. |
@@ -290,7 +285,7 @@ cmake -S . -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DMELEE_BUILD_PORT_TESTS=ON -DMELEE_BUILD_PORT_HEADLESS=ON -DMELEE_BUILD_PORT_METAL=ON
 cmake --build build/mac --target melee_port_mac --parallel
 tools/package_macos_app.sh build/mac dist
-open dist/iSlippi.app
+open dist/Dashdance.app
 ```
 
 ### iPad, iPhone and Vision Pro
@@ -307,7 +302,7 @@ cmake -S . -B build/ios-sim -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_C
   -DMELEE_PORT_GENERATED_DIR=$PWD/build/ios-sim/generated/guest \
   -DMELEE_BUILD_PORT_TESTS=OFF -DMELEE_BUILD_PORT_HEADLESS=OFF -DMELEE_BUILD_PORT_METAL=ON
 cmake --build build/ios-sim --target melee_port_mac --parallel
-xcrun simctl install booted build/ios-sim/port/iSlippi.app
+xcrun simctl install booted build/ios-sim/port/Dashdance.app
 ```
 
 Use `-DCMAKE_OSX_SYSROOT=iphoneos` for a device (sign the bundle with your team) and `-DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xrsimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=1.0` for the Vision Pro Simulator.
@@ -320,7 +315,7 @@ There are no public downloads, and there must not be: the built app contains the
 `.dmg` or `.ipa` on a public Releases page would hand Nintendo's code to everyone (and go against the
 Slippi team's wishes). What exists instead:
 
-- `tools/release.sh /path/to/melee.iso` builds `dist/iSlippi-<version>.dmg`, `dist/iSlippi-<version>.ipa`,
+- `tools/release.sh /path/to/melee.iso` builds `dist/Dashdance-<version>.dmg`, `dist/Dashdance-<version>.ipa`,
   checksums and release notes (generated from the commits since the last tag, in player terms) on your
   Mac. Add `--publish` to create a **draft** GitHub release with them; the script refuses unless the
   repository is private.
@@ -334,7 +329,7 @@ The upstream project, [Hero88go/melee-unlocked](https://github.com/Hero88go/mele
 
 ## Credits and legal
 
-The GameCube controller in the controller editors is the indigo controller from [ControllerOverlays](https://github.com/datkat21/ControllerOverlays) by Kat21, GPL-3.0 (see `port/app/art/controller/README.md`); builds that include it are distributed under GPL-3.0, which the project's GPL-2.0-or-later licence allows. The app icon and the dashboard mark use the Slippi logo from the [Slippi Launcher](https://github.com/project-slippi/slippi-launcher) (GPL-3.0). Slippi is a trademark of its authors; this is a community project and the logo is used to identify what the app connects to, not to claim affiliation. Design references: [dimillian/Skills](https://github.com/dimillian/Skills) (Liquid Glass, controls, haptics and review checklists), Apple's Liquid Glass documentation as collected in [xcode-27-system-prompts](https://github.com/artemnovichkov/xcode-27-system-prompts), and [PwrGit](https://github.com/pwrdrvr/PwrGit/pull/196) for the Icon Composer bundle layout.
+The GameCube controller in the controller editors is the indigo controller from [ControllerOverlays](https://github.com/datkat21/ControllerOverlays) by Kat21, GPL-3.0 (see `port/app/art/controller/README.md`); builds that include it are distributed under GPL-3.0, which the project's GPL-2.0-or-later licence allows. The Dashdance name, icon and mark are original to this project and use no Slippi artwork. Slippi is a trademark of its authors; Dashdance is an independent client that connects to Slippi Online and is not affiliated with it. Design references: [dimillian/Skills](https://github.com/dimillian/Skills) (Liquid Glass, controls, haptics and review checklists), Apple's Liquid Glass documentation as collected in [xcode-27-system-prompts](https://github.com/artemnovichkov/xcode-27-system-prompts), and [PwrGit](https://github.com/pwrdrvr/PwrGit/pull/196) for the Icon Composer bundle layout.
 
 Built on the work of the [Slippi](https://slippi.gg) team, the [Dolphin](https://dolphin-emu.org) project, [SDL](https://libsdl.org), [Aurora](https://github.com/encounter/aurora) (build tooling and the diagnostic renderer), the [doldecomp/melee](https://github.com/doldecomp/melee) contributors, and [Hero88go/melee-unlocked](https://github.com/Hero88go/melee-unlocked). This project is not affiliated with or endorsed by the Slippi team, Nintendo or HAL Laboratory.
 

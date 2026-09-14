@@ -40,7 +40,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
 
 @class MULauncherWindow;
 @class MUControllerEditor;
-// Menu bar extra (NSStatusItem): the Slippi mark in the menu bar with the player's rank, rating and
+// Menu bar extra (NSStatusItem): the Dashdance mark in the menu bar with the player's rank, rating and
 // record, the last games, and the actions that make sense from anywhere: Play, show the dashboard,
 // sign out, quit. Built once per process; the dashboard feeds it, the game keeps it.
 @interface MUStatusBar : NSObject
@@ -65,15 +65,15 @@ namespace {
 NSMenu* build_main_menu() {
   NSMenu* menubar = [[NSMenu alloc] init];
   NSMenuItem* appItem = [[NSMenuItem alloc] init]; [menubar addItem:appItem];
-  NSMenu* app = [[NSMenu alloc] initWithTitle:@"iSlippi"];
-  [app addItemWithTitle:@"About iSlippi" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
+  NSMenu* app = [[NSMenu alloc] initWithTitle:@"Dashdance"];
+  [app addItemWithTitle:@"About Dashdance" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
   [app addItem:[NSMenuItem separatorItem]];
-  [app addItemWithTitle:@"Hide iSlippi" action:@selector(hide:) keyEquivalent:@"h"];
+  [app addItemWithTitle:@"Hide Dashdance" action:@selector(hide:) keyEquivalent:@"h"];
   NSMenuItem* hideOthers = [app addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"];
   hideOthers.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
   [app addItemWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""];
   [app addItem:[NSMenuItem separatorItem]];
-  [app addItemWithTitle:@"Quit iSlippi" action:@selector(terminate:) keyEquivalent:@"q"];
+  [app addItemWithTitle:@"Quit Dashdance" action:@selector(terminate:) keyEquivalent:@"q"];
   appItem.submenu = app;
   NSMenuItem* windowItem = [[NSMenuItem alloc] init]; [menubar addItem:windowItem];
   NSMenu* window = [[NSMenu alloc] initWithTitle:@"Window"];
@@ -85,7 +85,7 @@ NSMenu* build_main_menu() {
   NSApp.windowsMenu = window;
   NSMenuItem* helpItem = [[NSMenuItem alloc] init]; [menubar addItem:helpItem];
   NSMenu* help = [[NSMenu alloc] initWithTitle:@"Help"];
-  NSMenuItem* gh = [help addItemWithTitle:@"iSlippi on GitHub" action:@selector(openGitHub:) keyEquivalent:@""]; gh.target = g_links;
+  NSMenuItem* gh = [help addItemWithTitle:@"Dashdance on GitHub" action:@selector(openGitHub:) keyEquivalent:@""]; gh.target = g_links;
   NSMenuItem* sg = [help addItemWithTitle:@"Slippi.gg" action:@selector(openSlippiSite:) keyEquivalent:@""]; sg.target = g_links;
   helpItem.submenu = help;
   NSApp.helpMenu = help;
@@ -99,13 +99,13 @@ void prepare_application() {
   [NSApp activateIgnoringOtherApps:YES];
 }
 NSColor* rgb(CGFloat r, CGFloat g, CGFloat b, CGFloat a = 1) { return [NSColor colorWithSRGBRed:r green:g blue:b alpha:a]; }
-// Theme: Melee's menu yellow on deep blue, Slippi green for the mark. One place for every colour.
+// Theme: Melee's menu yellow on deep blue, violet for the Dashdance mark. One place for every colour.
 NSColor* kYellow() { return rgb(0.97, 0.79, 0.28); }
-NSColor* kSlippiGreen() { return rgb(0.18, 0.76, 0.42); }
+NSColor* kMarkViolet() { return rgb(0.49, 0.36, 1.00); }
 NSColor* kGlassTint() { return rgb(0.30, 0.40, 1.0, 0.10); }
-// The Slippi mark ships in the bundle (SlippiMark.png, the icon's glyph layer); MELEE_MARK overrides the path (for the bare binary).
+// The Dashdance mark ships in the bundle (AppMark.png, the icon's glyph layer); MELEE_MARK overrides the path (for the bare binary).
 NSImage* slippi_mark() {
-  NSString* path = [NSBundle.mainBundle pathForResource:@"SlippiMark" ofType:@"png"];
+  NSString* path = [NSBundle.mainBundle pathForResource:@"AppMark" ofType:@"png"];
   if (const char* env = std::getenv("MELEE_MARK")) path = [NSString stringWithUTF8String:env];
   NSImage* image = path ? [[NSImage alloc] initWithContentsOfFile:path] : nil;
   [image setTemplate:YES];
@@ -452,7 +452,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   NSStackView* col = [[MUColumn alloc] init]; col.spacing = 12; col.translatesAutoresizingMaskIntoConstraints = NO;
   NSTextField* title = [NSTextField labelWithString:@"CONNECT A CONTROLLER"]; title.font = meleeFont(22); title.textColor = kYellow();
   [col addArrangedSubview:title];
-  [col addArrangedSubview:pairing_body(@"A wireless controller pairs once. After that it connects by itself whenever you turn it on, and shows up in iSlippi within a second.")];
+  [col addArrangedSubview:pairing_body(@"A wireless controller pairs once. After that it connects by itself whenever you turn it on, and shows up in Dashdance within a second.")];
   [col setCustomSpacing:20 afterView:col.arrangedSubviews.lastObject];
 
   [col addArrangedSubview:pairing_step(1, @"Put the controller in pairing mode")];
@@ -482,7 +482,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   for (NSView* v in @[self.spinner, self.check, self.status]) [statusRow addArrangedSubview:v];
   [col addArrangedSubview:statusRow];
   [col setCustomSpacing:24 afterView:statusRow];
-  [col addArrangedSubview:pairing_body(@"Using a cable? A USB controller works the moment you plug it in. GameCube controllers: plug a Wii U / Switch GameCube adapter (WUP-028, or a Mayflash in Wii U mode) into USB; iSlippi reads it directly at 1000 Hz.")];
+  [col addArrangedSubview:pairing_body(@"Using a cable? A USB controller works the moment you plug it in. GameCube controllers: plug a Wii U / Switch GameCube adapter (WUP-028, or a Mayflash in Wii U mode) into USB; Dashdance reads it directly at 1000 Hz.")];
 
   NSButton* done = pairing_button(@"Done", @"checkmark", self, @selector(close), YES); done.keyEquivalent = @"\r";
   done.translatesAutoresizingMaskIntoConstraints = NO;
@@ -824,7 +824,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   self.settings = settings; self.startupError = error; self.capturing = -1;
   NSRect frame = NSMakeRect(0, 0, 720, 900);
   self.window = [[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable | NSWindowStyleMaskFullSizeContentView backing:NSBackingStoreBuffered defer:NO];
-  self.window.title = @"iSlippi"; self.window.titlebarAppearsTransparent = YES; self.window.titleVisibility = NSWindowTitleHidden;
+  self.window.title = @"Dashdance"; self.window.titlebarAppearsTransparent = YES; self.window.titleVisibility = NSWindowTitleHidden;
   self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
   self.window.backgroundColor = rgb(0.03, 0.03, 0.09); self.window.minSize = NSMakeSize(560, 520);
   self.window.delegate = self; self.window.releasedWhenClosed = NO;
@@ -1008,13 +1008,13 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
     iv.contentTintColor = NSColor.whiteColor; iv.imageScaling = NSImageScaleProportionallyUpOrDown; iv.translatesAutoresizingMaskIntoConstraints = NO;
     if (@available(macOS 26.0, *)) {
       NSGlassEffectView* g = [[NSGlassEffectView alloc] init];
-      g.cornerRadius = size / 2; g.tintColor = [kSlippiGreen() colorWithAlphaComponent:0.22];
+      g.cornerRadius = size / 2; g.tintColor = [kMarkViolet() colorWithAlphaComponent:0.22];
       NSView* host = [[NSView alloc] init]; g.contentView = host; disc = g;
       host.translatesAutoresizingMaskIntoConstraints = NO;
       [NSLayoutConstraint activateConstraints:@[[host.topAnchor constraintEqualToAnchor:g.topAnchor], [host.bottomAnchor constraintEqualToAnchor:g.bottomAnchor], [host.leadingAnchor constraintEqualToAnchor:g.leadingAnchor], [host.trailingAnchor constraintEqualToAnchor:g.trailingAnchor]]];
       [host addSubview:iv];
     } else {
-      NSBox* box = [[NSBox alloc] init]; box.boxType = NSBoxCustom; box.cornerRadius = size / 2; box.borderWidth = 1; box.borderColor = [NSColor colorWithWhite:1 alpha:0.25]; box.fillColor = [kSlippiGreen() colorWithAlphaComponent:0.35]; box.contentViewMargins = NSMakeSize(0, 0);
+      NSBox* box = [[NSBox alloc] init]; box.boxType = NSBoxCustom; box.cornerRadius = size / 2; box.borderWidth = 1; box.borderColor = [NSColor colorWithWhite:1 alpha:0.25]; box.fillColor = [kMarkViolet() colorWithAlphaComponent:0.35]; box.contentViewMargins = NSMakeSize(0, 0);
       [box.contentView addSubview:iv]; disc = box;
     }
     disc.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1030,7 +1030,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   } else {
     [hero addArrangedSubview:[[MUHeroView alloc] initWithSize:110]];
   }
-  NSTextField* title = [NSTextField labelWithString:@"iSlippi"];
+  NSTextField* title = [NSTextField labelWithString:@"Dashdance"];
   title.font = meleeFont(46); title.textColor = NSColor.whiteColor;
   title.wantsLayer = YES; title.layer.shadowColor = kYellow().CGColor; title.layer.shadowOpacity = 0.5; title.layer.shadowRadius = 14; title.layer.shadowOffset = CGSizeZero;
   NSTextField* sub = [NSTextField labelWithString:@"SUPER SMASH BROS. MELEE  ·  SLIPPI ONLINE  ·  NATIVE"];
@@ -1507,8 +1507,8 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   self.item = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
   NSImage* mark = slippi_mark();
   if (mark) { mark.size = NSMakeSize(18, 18); self.item.button.image = mark; self.item.button.imagePosition = NSImageLeading; }
-  else self.item.button.title = @"iSlippi";
-  self.item.button.toolTip = @"iSlippi";
+  else self.item.button.title = @"Dashdance";
+  self.item.button.toolTip = @"Dashdance";
   [self refresh];
   return self;
 }
@@ -1548,7 +1548,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   [menu addItem:[NSMenuItem separatorItem]];
   NSMenuItem* play = [[NSMenuItem alloc] initWithTitle:self.playing ? @"Playing…" : @"Play" action:@selector(playFromMenu:) keyEquivalent:@""];
   play.target = self; play.enabled = !self.playing && self.launcher != nil; [menu addItem:play];
-  NSMenuItem* show = [[NSMenuItem alloc] initWithTitle:@"Show iSlippi" action:@selector(showApp:) keyEquivalent:@""];
+  NSMenuItem* show = [[NSMenuItem alloc] initWithTitle:@"Show Dashdance" action:@selector(showApp:) keyEquivalent:@""];
   show.target = self; [menu addItem:show];
   if (d.signed_in && !self.playing && self.launcher) {
     NSMenuItem* out = [[NSMenuItem alloc] initWithTitle:@"Sign Out of Slippi" action:@selector(signOutFromMenu:) keyEquivalent:@""];
@@ -1556,7 +1556,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   }
   [menu addItem:[NSMenuItem separatorItem]];
   NSMenuItem* site = [[NSMenuItem alloc] initWithTitle:@"Slippi.gg" action:@selector(openSlippiSite:) keyEquivalent:@""]; site.target = g_links; [menu addItem:site];
-  NSMenuItem* quit = [[NSMenuItem alloc] initWithTitle:@"Quit iSlippi" action:@selector(terminate:) keyEquivalent:@"q"]; quit.target = NSApp; [menu addItem:quit];
+  NSMenuItem* quit = [[NSMenuItem alloc] initWithTitle:@"Quit Dashdance" action:@selector(terminate:) keyEquivalent:@"q"]; quit.target = NSApp; [menu addItem:quit];
   self.item.menu = menu;
 }
 - (void)playFromMenu:(id)sender { if (self.launcher) [self.launcher play]; }

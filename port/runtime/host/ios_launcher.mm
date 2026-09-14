@@ -23,10 +23,10 @@
 
 namespace {
 UIColor* rgb(CGFloat r, CGFloat g, CGFloat b, CGFloat a = 1) { return [UIColor colorWithRed:r green:g blue:b alpha:a]; }
-// Theme: Melee's menu yellow on deep blue, Slippi green for the mark. One place for every colour.
+// Theme: Melee's menu yellow on deep blue, violet for the Dashdance mark. One place for every colour.
 UIColor* kYellow() { return rgb(0.97, 0.79, 0.28); }
 UIColor* kRed() { return rgb(0.89, 0.27, 0.17); }
-UIColor* kSlippiGreen() { return rgb(0.18, 0.76, 0.42); }
+UIColor* kMarkViolet() { return rgb(0.49, 0.36, 1.00); }
 UIColor* kGlassTint() { return rgb(0.30, 0.40, 1.0, 0.10); }
 // Liquid Glass (iOS 26): glass cards and buttons; older systems get the material fallback.
 bool glass_available() {
@@ -48,9 +48,9 @@ void haptic_notify(bool success) {
   UINotificationFeedbackGenerator* g = [[UINotificationFeedbackGenerator alloc] init]; [g prepare]; [g notificationOccurred:success ? UINotificationFeedbackTypeSuccess : UINotificationFeedbackTypeError];
 #endif
 }
-// The Slippi mark ships in the bundle (SlippiMark.png, from the icon's glyph layer); MELEE_MARK overrides the path (for the bare binary).
+// The Dashdance mark ships in the bundle (AppMark.png, from the icon's glyph layer); MELEE_MARK overrides the path (for the bare binary).
 UIImage* slippi_mark() {
-  NSString* path = [NSBundle.mainBundle pathForResource:@"SlippiMark" ofType:@"png"];
+  NSString* path = [NSBundle.mainBundle pathForResource:@"AppMark" ofType:@"png"];
   if (const char* env = std::getenv("MELEE_MARK")) path = [NSString stringWithUTF8String:env];
   UIImage* image = path ? [UIImage imageWithContentsOfFile:path] : nil;
   return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
@@ -804,7 +804,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
 #if !TARGET_OS_VISION
   if (@available(iOS 26.0, *)) {
     UIGlassEffect* glass = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
-    glass.tintColor = [kSlippiGreen() colorWithAlphaComponent:0.22]; glass.interactive = YES;
+    glass.tintColor = [kMarkViolet() colorWithAlphaComponent:0.22]; glass.interactive = YES;
     disc = [[UIVisualEffectView alloc] initWithEffect:glass];
   } else
 #endif
@@ -985,7 +985,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
     [hero addArrangedSubview:[[MUHeroView alloc] initWithSize:120]];
   }
   UILabel* title = [[UILabel alloc] init];
-  title.text = @"iSlippi"; title.font = meleeFont(52, UIFontWeightBlack); title.textColor = UIColor.whiteColor;
+  title.text = @"Dashdance"; title.font = meleeFont(52, UIFontWeightBlack); title.textColor = UIColor.whiteColor;
   title.layer.shadowColor = kYellow().CGColor; title.layer.shadowOpacity = 0.5; title.layer.shadowRadius = 14; title.layer.shadowOffset = CGSizeZero;
   UILabel* sub = [self label:@"SUPER SMASH BROS. MELEE  ·  SLIPPI ONLINE  ·  NATIVE" size:12 weight:UIFontWeightSemibold alpha:0.6];
   // The player badge: a yellow capsule with real padding. Long names shrink the text slightly, then truncate, and the

@@ -114,11 +114,13 @@ std::vector<ReadinessItem> competitive_readiness(int display_hz, bool fullscreen
   network_monitor_start();
   std::vector<ReadinessItem> v;
   char b[200];
-  if (display_hz >= 100) { std::snprintf(b, sizeof b, "%d Hz display: each frame reaches the screen on the next fast refresh", display_hz); v.push_back({true, b}); }
-  else { std::snprintf(b, sizeof b, "%d Hz display: a 120 Hz display shows each frame up to 8 ms sooner", display_hz); v.push_back({false, b}); }
+  // The wait is this display's own refresh interval, never a number from some other screen.
+  const double wait_ms = 1000.0 / std::max(display_hz, 1);
+  if (display_hz >= 100) { std::snprintf(b, sizeof b, "%d Hz display: a finished frame waits at most %.1f ms for the next refresh", display_hz, wait_ms); v.push_back({true, b}); }
+  else { std::snprintf(b, sizeof b, "%d Hz display: frames wait up to %.1f ms for a refresh; a faster display shortens that", display_hz, wait_ms); v.push_back({false, b}); }
 #if TARGET_OS_OSX
-  v.push_back(fullscreen ? ReadinessItem{true, "Starts in full screen: about 15 ms faster than a window"}
-                         : ReadinessItem{false, "Starts in a window: full screen is about 15 ms faster"});
+  v.push_back(fullscreen ? ReadinessItem{true, "Starts in full screen: frames skip the window compositor"}
+                         : ReadinessItem{false, "Starts in a window: the compositor can hold each frame an extra refresh"});
 #else
   (void)fullscreen;
 #endif

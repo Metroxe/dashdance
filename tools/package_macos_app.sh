@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Packages the macOS build as "iSlippi.app" (ad-hoc signed). Nothing from the
+# Packages the macOS build as "Dashdance.app" (ad-hoc signed). Nothing from the
 # game enters the bundle: only the executable and the vendored Slippi Sys folder.
 # Usage: tools/package_macos_app.sh <build-dir> <output-dir>
 set -euo pipefail
@@ -7,17 +7,17 @@ ROOT="${0:A:h:h}"
 BUILD="${1:?build dir}"
 OUT="${2:?output dir}"
 VERSION="$(head -n1 "$ROOT/VERSION")"
-APP="$OUT/iSlippi.app"
+APP="$OUT/Dashdance.app"
 EXE="$BUILD/port/melee_port_mac"
 [[ -x "$EXE" ]] || { echo "missing $EXE; build target melee_port_mac first" >&2; exit 1; }
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 sed "s/@VERSION@/$VERSION/g" "$ROOT/port/app/macos/Info.plist" > "$APP/Contents/Info.plist"
-cp "$EXE" "$APP/Contents/MacOS/iSlippi"
+cp "$EXE" "$APP/Contents/MacOS/Dashdance"
 cp -R "$ROOT/port/slippi_sys" "$APP/Contents/Resources/slippi_sys"
-cp "$ROOT/port/app/icons/AppIcon.icon/Assets/glyph.png" "$APP/Contents/Resources/SlippiMark.png"   # the hero mark in the dashboard
+cp "$ROOT/port/app/icons/AppIcon.icon/Assets/glyph.png" "$APP/Contents/Resources/AppMark.png"   # the hero mark in the dashboard
 cp -R "$ROOT/port/app/art/controller" "$APP/Contents/Resources/controller"                        # controller editor artwork
-# App icon: the Icon Composer bundle (Slippi mark as a glass layer over the Slippi green) compiled by
+# App icon: the Icon Composer bundle (the Dashdance mark as a glass layer over violet) compiled by
 # actool into Assets.car + AppIcon.icns, so macOS 26 renders it as Liquid Glass. Older toolchains fall
 # back to the flat 1024px master.
 # actool lives in Xcode, not in the Command Line Tools; point at Xcode for this one step when it is installed.

@@ -1,5 +1,5 @@
 {
-  "fill": { "linear-gradient": ["srgb:0.17647,0.75686,0.42353,1.00000", "srgb:0.05098,0.36078,0.24314,1.00000"] },
+  "fill": { "linear-gradient": ["srgb:0.49020,0.36078,1.00000,1.00000", "srgb:0.15686,0.09020,0.41961,1.00000"] },
   "groups": [
     { "name": "Mark",
       "layers": [ { "name": "glyph", "image-name": "glyph.png", "fill": "automatic", "glass": true, "hidden": false, "blend-mode": "normal" } ],

@@ -436,11 +436,11 @@ class MetalBackend final : public Backend {
   }
   // ---- background compilation
   dispatch_queue_t compile_queue() {   // in-game misses: concurrent, user-initiated
-    if (!compile_queue_) compile_queue_ = dispatch_queue_create("app.islippi.metal.compile", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_CONCURRENT, QOS_CLASS_USER_INITIATED, 0));
+    if (!compile_queue_) compile_queue_ = dispatch_queue_create("app.dashdance.metal.compile", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_CONCURRENT, QOS_CLASS_USER_INITIATED, 0));
     return compile_queue_;
   }
   dispatch_queue_t precompile_queue() {   // the previous session's list at boot: serial, so it never floods the thread pool
-    if (!precompile_queue_) precompile_queue_ = dispatch_queue_create("app.islippi.metal.precompile", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
+    if (!precompile_queue_) precompile_queue_ = dispatch_queue_create("app.dashdance.metal.precompile", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
     return precompile_queue_;
   }
   void start_compile_job(const PsoKey& key, const VSUid& vsu, const PSUid& psu, dispatch_queue_t queue) {

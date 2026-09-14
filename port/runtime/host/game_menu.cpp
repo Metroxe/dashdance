@@ -422,7 +422,7 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
   out.shapes.push_back({x0, y0, x1, y1, 0.03f, 0.04f, 0.12f, 0.985f, unit * 0.7f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
   out.shapes.push_back({x0, y0, x1, y1, 0.5f, 0.6f, 1.0f, 0.25f, unit * 0.7f, 1.5f, 0.0f, 0, 0.0f, 0.0f});
   // Title bar in Melee's angled yellow.
-  const std::string title = g_page == Page::Main ? "iSLIPPI  SETTINGS" : g_page == Page::Controls ? "CONTROLS" : "REMAP  " + upper(device() ? device()->name : "");
+  const std::string title = g_page == Page::Main ? "DASHDANCE  SETTINGS" : g_page == Page::Controls ? "CONTROLS" : "REMAP  " + upper(device() ? device()->name : "");
   out.shapes.push_back({x0 + pad, y0 + pad, x0 + pad + panel_w * 0.62f, y0 + pad + title_h, 0.97f, 0.79f, 0.28f, 1.0f, unit * 0.15f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
   out.texts.push_back({x0 + pad + unit * 0.5f, y0 + pad + title_h * 0.12f, title_h * 0.75f, 0.10f, 0.08f, 0.02f, 1.0f, 0, title, panel_w * 0.62f - unit * 1.2f});
   const float top = y0 + pad + title_h + unit * 0.5f;

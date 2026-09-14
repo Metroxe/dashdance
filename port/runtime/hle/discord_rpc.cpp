@@ -100,7 +100,7 @@ uint32_t be32(const uint8_t* p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1
 
 std::pair<std::string, std::string> player_badge(const State& s) {
   const std::string tier = s.show_rank ? tier_name(s.rank) : "";
-  if (tier.empty()) return {"slippi", "Slippi Online"};
+  if (tier.empty()) return {"", "Slippi Online"};   // no Slippi logo: Discord shows the application's own icon instead
   return {lower_key(tier), tier + " \xC2\xB7 " + std::to_string((int)std::lround(s.rating))};
 }
 json build(const State& s) {
@@ -114,20 +114,20 @@ json build(const State& s) {
   switch (s.phase) {
     case Phase::Menus:
       a["details"] = "Slippi Online"; a["state"] = "In menus";
-      assets = {{"large_image", badge.first}, {"large_text", badge.second}};
+      if (!badge.first.empty()) assets = {{"large_image", badge.first}, {"large_text", badge.second}};
       break;
     case Phase::Searching:
       a["details"] = s.mode.empty() ? std::string("In queue") : "In queue - " + mode_title(s.mode);
       a["state"] = "Searching for an opponent";
       a["party"] = {{"size", {1, 2}}};
-      assets = {{"large_image", badge.first}, {"large_text", badge.second}};
+      if (!badge.first.empty()) assets = {{"large_image", badge.first}, {"large_text", badge.second}};
       break;
     case Phase::Opponent: {
       a["details"] = "Opponent found";
       a["state"] = s.opponent.empty() ? std::string("Connecting...") : "vs " + s.opponent;
       a["party"] = {{"size", {2, 2}}};
       if (s.show_rank && s.opponent_rank >= 1 && s.opponent_rank <= 19) assets = {{"large_image", lower_key(kRankNames[s.opponent_rank])}, {"large_text", kRankNames[s.opponent_rank]}};
-      else assets = {{"large_image", badge.first}, {"large_text", badge.second}};
+      else if (!badge.first.empty()) assets = {{"large_image", badge.first}, {"large_text", badge.second}};
       break;
     }
     case Phase::Game: {
@@ -150,7 +150,7 @@ json build(const State& s) {
       break;
     }
   }
-  a["assets"] = assets;
+  if (assets.is_object() && !assets.empty()) a["assets"] = assets;
   a["buttons"] = buttons;
   return a;
 }
@@ -230,7 +230,9 @@ void run() {
       }
       if (send) {
         static std::string last_logged;
-        const std::string summary = jget(activity, "details", "") + " | " + jget(activity, "state", "") + " | " + activity["assets"].value("large_image", "") + " " + activity["assets"].value("small_image", "");
+        // Presence may carry no images at all (no rank to show): read them without assuming the object exists.
+        const nlohmann::json activity_assets = activity.is_object() && activity.count("assets") && activity.at("assets").is_object() ? activity.at("assets") : nlohmann::json::object();
+        const std::string summary = jget(activity, "details", "") + " | " + jget(activity, "state", "") + " | " + jget(activity_assets, "large_image", "") + " " + jget(activity_assets, "small_image", "");
         if (summary != last_logged) { last_logged = summary; host::log("discord: presence %s", summary.c_str()); }
         const json args = {{"pid", (int)::getpid()}, {"activity", activity}};
         const std::string frame = json{{"cmd", "SET_ACTIVITY"}, {"args", args}, {"nonce", std::to_string(now.time_since_epoch().count())}}.dump();

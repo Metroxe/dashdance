@@ -38,8 +38,8 @@ jobs:
             -DMELEE_BUILD_PORT_TESTS=OFF -DMELEE_BUILD_PORT_HEADLESS=OFF -DMELEE_BUILD_PORT_METAL=ON
           cmake --build build/mac --target melee_port_mac --parallel
           tools/package_macos_app.sh build/mac dist
-          V=$(head -n1 VERSION); S=$(mktemp -d); cp -R dist/iSlippi.app "$S/"; ln -s /Applications "$S/Applications"
-          hdiutil create -volname "iSlippi $V" -srcfolder "$S" -ov -format UDZO -quiet "dist/iSlippi-$V.dmg"
+          V=$(head -n1 VERSION); S=$(mktemp -d); cp -R dist/Dashdance.app "$S/"; ln -s /Applications "$S/Applications"
+          hdiutil create -volname "Dashdance $V" -srcfolder "$S" -ov -format UDZO -quiet "dist/Dashdance-$V.dmg"
       - name: iPhone/iPad IPA (ad-hoc, for sideloading)
         run: |
           export DEVELOPER_DIR="$(xcode-select -p)"
@@ -49,13 +49,13 @@ jobs:
             -DMELEE_DECOMP_ROOT=$PWD/deps/melee -DMELEE_DOL_PATH=$PWD/deps/disc/main.dol -DMELEE_PORT_GENERATED_DIR=$PWD/build/ios-device/generated/guest \
             -DMELEE_BUILD_PORT_TESTS=OFF -DMELEE_BUILD_PORT_HEADLESS=OFF -DMELEE_BUILD_PORT_METAL=ON
           cmake --build build/ios-device --target melee_port_mac --parallel
-          codesign --force --sign - --timestamp=none build/ios-device/port/iSlippi.app
-          V=$(head -n1 VERSION); mkdir -p dist/ipa/Payload && cp -R build/ios-device/port/iSlippi.app dist/ipa/Payload/ && (cd dist/ipa && zip -qry "../iSlippi-$V.ipa" Payload)
+          codesign --force --sign - --timestamp=none build/ios-device/port/Dashdance.app
+          V=$(head -n1 VERSION); mkdir -p dist/ipa/Payload && cp -R build/ios-device/port/Dashdance.app dist/ipa/Payload/ && (cd dist/ipa && zip -qry "../Dashdance-$V.ipa" Payload)
       - name: Checksums and notes
-        run: V=$(head -n1 VERSION); (cd dist && shasum -a 256 "iSlippi-$V.dmg" "iSlippi-$V.ipa" > "SHA256SUMS-$V.txt"); python3 tools/release_notes.py > dist/RELEASE_NOTES.md; cat dist/RELEASE_NOTES.md
+        run: V=$(head -n1 VERSION); (cd dist && shasum -a 256 "Dashdance-$V.dmg" "Dashdance-$V.ipa" > "SHA256SUMS-$V.txt"); python3 tools/release_notes.py > dist/RELEASE_NOTES.md; cat dist/RELEASE_NOTES.md
       - name: Draft release
         if: startsWith(github.ref, 'refs/tags/v')
         env: { GH_TOKEN: "${{ github.token }}" }
-        run: V=$(head -n1 VERSION); gh release create "${{ github.ref_name }}" --draft --title "iSlippi $V" --notes-file dist/RELEASE_NOTES.md "dist/iSlippi-$V.dmg" "dist/iSlippi-$V.ipa" "dist/SHA256SUMS-$V.txt"
+        run: V=$(head -n1 VERSION); gh release create "${{ github.ref_name }}" --draft --title "Dashdance $V" --notes-file dist/RELEASE_NOTES.md "dist/Dashdance-$V.dmg" "dist/Dashdance-$V.ipa" "dist/SHA256SUMS-$V.txt"
       - uses: actions/upload-artifact@v4
-        with: { name: iSlippi-${{ github.ref_name }}, path: "dist/*.dmg\ndist/*.ipa\ndist/SHA256SUMS-*.txt\ndist/RELEASE_NOTES.md", retention-days: 14 }
+        with: { name: Dashdance-${{ github.ref_name }}, path: "dist/*.dmg\ndist/*.ipa\ndist/SHA256SUMS-*.txt\ndist/RELEASE_NOTES.md", retention-days: 14 }

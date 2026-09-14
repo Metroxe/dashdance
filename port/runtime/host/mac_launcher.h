@@ -17,7 +17,7 @@ struct LauncherSettings {
   bool vsync = true;           // display sync; off = uncapped presentation
   bool fullscreen = true;
   int volume = 70;             // 0..100
-  bool discord_enabled = true, discord_show_rank = true;   // Discord Rich Presence (macOS), through iSlippi's Discord application
+  bool discord_enabled = true, discord_show_rank = true;   // Discord Rich Presence (macOS), through Dashdance's Discord application
   std::string rank; float rating = 0.0f;                  // the player's tier and rating, once the dashboard fetched them
   bool hud = false;            // performance HUD in game      // macOS: start in full screen (measured: ~10 ms display latency versus ~25 ms in a window, which costs a compositor frame)
   int display_hz = 60;         // informational: the display's maximum refresh rate

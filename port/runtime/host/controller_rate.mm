@@ -36,7 +36,7 @@ void record(GCController* controller) {
 
 void attach(GCController* controller) {
   if (!controller) return;
-  if (!g_queue) g_queue = dispatch_queue_create("app.islippi.controller-events", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
+  if (!g_queue) g_queue = dispatch_queue_create("app.dashdance.controller-events", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
   controller.handlerQueue = g_queue;   // change handlers (ours) run off the main thread, at user-interactive priority
   {
     std::lock_guard<std::mutex> lock(g_mutex);

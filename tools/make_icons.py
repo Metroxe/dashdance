@@ -1,41 +1,30 @@
 #!/usr/bin/env python3
-"""Draws the app icon (no game assets): an indigo gradient with a white ring and core.
-Writes port/app/icons/AppIcon-1024.png plus the iOS sizes; macOS .icns is built by
-tools/package_macos_app.sh with iconutil."""
-import math, os, sys
+"""Draws the flat fallback app icons (no game or Slippi assets): the Dashdance mark from the Icon Composer bundle
+(port/app/icons/AppIcon.icon/Assets/glyph.png, drawn from port/app/icons/dashdance_mark.svg) on the icon's violet
+gradient. Writes port/app/icons/AppIcon-1024.png plus the iOS sizes. The Liquid Glass icon itself is compiled from the
+Icon Composer bundle by actool; these PNGs are for toolchains without it."""
+import os
 from PIL import Image, ImageDraw, ImageFilter
 
-out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "port", "app", "icons")
-os.makedirs(out_dir, exist_ok=True)
+icons = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "port", "app", "icons")
 S = 1024
-img = Image.new("RGB", (S, S))
-px = img.load()
+top, bottom = (125, 92, 255), (40, 23, 107)   # matches the fill in AppIcon.icon/icon.json
+bg = Image.new("RGB", (S, S))
+px = bg.load()
 for y in range(S):
     for x in range(S):
-        t = (x + y) / (2 * S)
-        r = 0.16 + (0.04 - 0.16) * t; g = 0.10 + (0.03 - 0.10) * t; b = 0.40 + (0.12 - 0.40) * t
-        px[x, y] = (int(r * 255), int(g * 255), int(b * 255))
-# soft violet glow top-left
+        t = (x * 0.35 + y * 0.65) / S
+        px[x, y] = tuple(round(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
 glow = Image.new("L", (S, S), 0)
-ImageDraw.Draw(glow).ellipse((-200, -200, 620, 620), fill=140)
-glow = glow.filter(ImageFilter.GaussianBlur(160))
-img = Image.composite(Image.new("RGB", (S, S), (110, 80, 230)), img, glow)
-# ring + core with a drop shadow
-shadow = Image.new("L", (S, S), 0)
-d = ImageDraw.Draw(shadow)
-d.ellipse((212, 232, 812, 832), fill=255)
-shadow = shadow.filter(ImageFilter.GaussianBlur(40))
-img = Image.composite(Image.new("RGB", (S, S), (10, 6, 30)), img, shadow.point(lambda v: v * 0.6))
-mark = Image.new("L", (S, S), 0)
-d = ImageDraw.Draw(mark)
-d.ellipse((212, 212, 812, 812), fill=255)
-d.ellipse((292, 292, 732, 732), fill=0)
-d.ellipse((392, 392, 632, 632), fill=255)
-# a diagonal cut through the ring (motion)
-d.polygon([(150, 560), (874, 400), (874, 470), (150, 630)], fill=0)
-mark = mark.filter(ImageFilter.GaussianBlur(1.2))
-img = Image.composite(Image.new("RGB", (S, S), (255, 255, 255)), img, mark)
-img.save(os.path.join(out_dir, "AppIcon-1024.png"))
+ImageDraw.Draw(glow).ellipse((-240, -260, 640, 560), fill=120)
+bg = Image.composite(Image.new("RGB", (S, S), (190, 170, 255)), bg, glow.filter(ImageFilter.GaussianBlur(170)))
+mark = Image.open(os.path.join(icons, "AppIcon.icon", "Assets", "glyph.png")).convert("RGBA").resize((S, S), Image.LANCZOS)
+icon = bg.convert("RGBA")
+shadow = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+shadow.paste((10, 5, 40, 150), (0, 18), mark.split()[3])
+icon = Image.alpha_composite(icon, shadow.filter(ImageFilter.GaussianBlur(26)))
+icon = Image.alpha_composite(icon, mark).convert("RGB")
+icon.save(os.path.join(icons, "AppIcon-1024.png"))
 for name, size in [("AppIcon60x60@2x", 120), ("AppIcon60x60@3x", 180), ("AppIcon76x76@2x", 152), ("AppIcon83.5x83.5@2x", 167)]:
-    img.resize((size, size), Image.LANCZOS).save(os.path.join(out_dir, name + ".png"))
-print("icons written to", out_dir)
+    icon.resize((size, size), Image.LANCZOS).save(os.path.join(icons, name + ".png"))
+print("icons written to", icons)

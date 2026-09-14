@@ -1,7 +1,7 @@
 // Discord Rich Presence through the Discord desktop app's local IPC socket (macOS).
 // The same presence the Slippi project added to its Rust extensions (slippi-rust-extensions
 // PR 36), done natively and with that PR's Discord application and artwork: the application id is
-// built in, so there is nothing to set up and no login inside iSlippi. Menus, queue and opponent come
+// built in, so there is nothing to set up and no login inside Dashdance. Menus, queue and opponent come
 // from matchmaking; stage, characters, live stocks and set score come from the replay event stream.
 // Nothing else is affected when Discord is not running.
 // SPDX-License-Identifier: GPL-2.0-or-later
@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <string>
 namespace slippi::discord {
-constexpr const char* kApplicationId = "1096595344600604772";   // iSlippi's Discord application (from slippi-rust-extensions PR 36)
+constexpr const char* kApplicationId = "1096595344600604772";   // Dashdance's Discord application (from slippi-rust-extensions PR 36)
 
 // `application_id_override` is for testing against another application; empty uses kApplicationId.
 void start(bool show_rank, const std::string& application_id_override = "");
