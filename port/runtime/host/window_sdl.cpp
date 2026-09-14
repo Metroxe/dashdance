@@ -39,6 +39,7 @@ ResizeCallback g_resize;
 MessageCallback g_message;
 std::atomic<bool> g_closed{false};
 std::atomic<bool> g_fullscreen_toggle{false};
+std::atomic<int> g_last_key_press{-1};   // scancode of the latest key press, for remapping in the in-game menu
 std::atomic<bool> g_capture{false};
 std::mutex g_ui_mutex;
 PadState g_ui_pad{};
@@ -288,7 +289,7 @@ void read_gamepad(SDL_Gamepad* pad, PadState& p) {
     if (input == kTriggerLeft || input == kTriggerRight) {
       const int v = input == kTriggerLeft ? lt : rt;
       if (analog && v > 30) *analog = (uint8_t)std::min(v, 255);
-      return v > 200;
+      return v >= std::max(1, map.trigger_press * 255 / 100);   // the press point is per controller
     }
     return SDL_GetGamepadButton(pad, (SDL_GamepadButton)input);
   };
@@ -303,28 +304,30 @@ void read_gamepad(SDL_Gamepad* pad, PadState& p) {
   Sint16 lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX), ly = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
   Sint16 rx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX), ry = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
   if (map.swap_sticks) { std::swap(lx, rx); std::swap(ly, ry); }
-  if (std::abs(lx) > 7849 || std::abs(ly) > 7849) { p.stick_x = axis_to_stick(lx, 0); p.stick_y = axis_to_stick((Sint16)std::clamp(-(int)ly, -32767, 32767), 0); }
-  if (std::abs(rx) > 8689 || std::abs(ry) > 8689) { p.sub_x = axis_to_stick(rx, 0); p.sub_y = axis_to_stick((Sint16)std::clamp(-(int)ry, -32767, 32767), 0); }
+  const int dz = map.stick_deadzone * 32767 / 100, cdz = map.cstick_deadzone * 32767 / 100;
+  if (std::abs(lx) > dz || std::abs(ly) > dz) { p.stick_x = axis_to_stick(lx, 0); p.stick_y = axis_to_stick((Sint16)std::clamp(-(int)ly, -32767, 32767), 0); }
+  if (std::abs(rx) > cdz || std::abs(ry) > cdz) { p.sub_x = axis_to_stick(rx, 0); p.sub_y = axis_to_stick((Sint16)std::clamp(-(int)ry, -32767, 32767), 0); }
 }
 
 void read_keyboard(PadState& p) {
   int count = 0;
   const bool* keys = SDL_GetKeyboardState(&count);
   if (!keys) return;
-  auto key = [&](SDL_Scancode code) { return code < count && keys[code]; };
+  const KeyboardMap& km = keyboard_map();
+  auto key = [&](int control) { const int code = km.key[control]; return code > 0 && code < count && keys[code]; };
+  static const uint16_t gc_bits[GC_CTL_COUNT] = {GC_A, GC_B, GC_X, GC_Y, GC_Z, GC_L, GC_R, GC_START, GC_UP, GC_DOWN, GC_LEFT, GC_RIGHT};
+  for (int i = 0; i < GC_CTL_COUNT; ++i) {
+    if (!key(i)) continue;
+    p.button |= gc_bits[i];
+    if (i == GC_CTL_L) p.trig_l = 255;
+    if (i == GC_CTL_R) p.trig_r = 255;
+  }
+  const int full = key(KB_MODIFIER) ? 127 * km.modifier_percent / 100 : 127;   // the modifier walks, tilts and light-shields
   int sx = 0, sy = 0, cx = 0, cy = 0;
-  if (key(SDL_SCANCODE_LEFT)) sx -= 127; if (key(SDL_SCANCODE_RIGHT)) sx += 127;
-  if (key(SDL_SCANCODE_UP)) sy += 127; if (key(SDL_SCANCODE_DOWN)) sy -= 127;
-  if (key(SDL_SCANCODE_J)) cx -= 127; if (key(SDL_SCANCODE_L)) cx += 127;
-  if (key(SDL_SCANCODE_I)) cy += 127; if (key(SDL_SCANCODE_K)) cy -= 127;
-  if (key(SDL_SCANCODE_Z)) p.button |= GC_A; if (key(SDL_SCANCODE_X)) p.button |= GC_B;
-  if (key(SDL_SCANCODE_C)) p.button |= GC_X; if (key(SDL_SCANCODE_V)) p.button |= GC_Y;
-  if (key(SDL_SCANCODE_RETURN) || key(SDL_SCANCODE_KP_ENTER)) p.button |= GC_START;
-  if (key(SDL_SCANCODE_Q)) { p.button |= GC_L; p.trig_l = 255; }
-  if (key(SDL_SCANCODE_W)) { p.button |= GC_R; p.trig_r = 255; }
-  if (key(SDL_SCANCODE_E)) p.button |= GC_Z;
-  if (key(SDL_SCANCODE_T)) p.button |= GC_UP; if (key(SDL_SCANCODE_G)) p.button |= GC_DOWN;
-  if (key(SDL_SCANCODE_F)) p.button |= GC_LEFT; if (key(SDL_SCANCODE_H)) p.button |= GC_RIGHT;
+  if (key(KB_STICK_LEFT)) sx -= full; if (key(KB_STICK_RIGHT)) sx += full;
+  if (key(KB_STICK_UP)) sy += full; if (key(KB_STICK_DOWN)) sy -= full;
+  if (key(KB_CSTICK_LEFT)) cx -= 127; if (key(KB_CSTICK_RIGHT)) cx += 127;
+  if (key(KB_CSTICK_UP)) cy += 127; if (key(KB_CSTICK_DOWN)) cy -= 127;
   if (sx || sy) { p.stick_x = (int8_t)sx; p.stick_y = (int8_t)sy; }
   if (cx || cy) { p.sub_x = (int8_t)cx; p.sub_y = (int8_t)cy; }
 }
@@ -412,7 +415,8 @@ void window_pump() {
       case SDL_EVENT_GAMEPAD_REMOVED: close_gamepad(event.gdevice.which); break;
       case SDL_EVENT_KEY_DOWN:
         if (event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT) && !event.key.repeat) g_fullscreen_toggle.store(true);
-        if ((event.key.key == SDLK_F1 || event.key.key == SDLK_ESCAPE) && !event.key.repeat) menu_toggle();
+        if (!event.key.repeat) g_last_key_press.store((int)event.key.scancode);
+        if ((event.key.key == SDLK_F1 || event.key.key == SDLK_ESCAPE) && !event.key.repeat && !menu_capturing()) menu_toggle();
         break;
       case SDL_EVENT_FINGER_DOWN: case SDL_EVENT_FINGER_MOTION: case SDL_EVENT_FINGER_UP: case SDL_EVENT_FINGER_CANCELED:
         touch_event(event.tfinger);
@@ -477,11 +481,31 @@ int window_capture_input(const std::string& guid) {
   }
   return kUnbound;
 }
+bool window_controller_state(const std::string& guid, ControllerLiveState& out) {
+  SDL_PumpEvents();
+  for (SDL_Gamepad* pad : g_gamepads) {
+    if (gamepad_guid(pad) != guid) continue;
+    auto axis = [&](SDL_GamepadAxis a) { return std::clamp(SDL_GetGamepadAxis(pad, a) / 32767.0f, -1.0f, 1.0f); };
+    out.lx = axis(SDL_GAMEPAD_AXIS_LEFTX); out.ly = -axis(SDL_GAMEPAD_AXIS_LEFTY);
+    out.rx = axis(SDL_GAMEPAD_AXIS_RIGHTX); out.ry = -axis(SDL_GAMEPAD_AXIS_RIGHTY);
+    out.lt = std::max(0.0f, axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER)); out.rt = std::max(0.0f, axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
+    for (int b = 0; b < 32 && b < SDL_GAMEPAD_BUTTON_COUNT; ++b) out.button[b] = SDL_GetGamepadButton(pad, (SDL_GamepadButton)b);
+    return true;
+  }
+  return false;
+}
+void window_test_rumble(const std::string& guid) {
+  for (SDL_Gamepad* pad : g_gamepads) if (gamepad_guid(pad) == guid) { SDL_RumbleGamepad(pad, 0xC000, 0xC000, 350); return; }
+}
+int window_take_key_press() { return g_last_key_press.exchange(-1); }
 // Rumble for a GameCube port served by an SDL gamepad (DualSense, Xbox, MFi, Switch Pro...).
 void window_gamepad_rumble(int port, bool on) {
   if (port < 0 || port >= 4 || !g_gamepad_port[port]) return;
   for (SDL_Gamepad* pad : g_gamepads)
-    if (SDL_GetGamepadID(pad) == g_gamepad_port[port]) { SDL_RumbleGamepad(pad, on ? 0xC000 : 0, on ? 0xC000 : 0, on ? 250 : 0); return; }
+    if (SDL_GetGamepadID(pad) == g_gamepad_port[port]) {
+      if (const ControllerConfig* c = controller_config_for(gamepad_guid(pad)); c && !c->map.rumble) on = false;
+      SDL_RumbleGamepad(pad, on ? 0xC000 : 0, on ? 0xC000 : 0, on ? 250 : 0); return;
+    }
 }
 bool window_take_fullscreen_toggle() { return g_fullscreen_toggle.exchange(false); }
 double window_refresh_rate() {

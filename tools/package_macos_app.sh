@@ -16,6 +16,7 @@ sed "s/@VERSION@/$VERSION/g" "$ROOT/port/app/macos/Info.plist" > "$APP/Contents/
 cp "$EXE" "$APP/Contents/MacOS/iSlippi"
 cp -R "$ROOT/port/slippi_sys" "$APP/Contents/Resources/slippi_sys"
 cp "$ROOT/port/app/icons/AppIcon.icon/Assets/glyph.png" "$APP/Contents/Resources/SlippiMark.png"   # the hero mark in the dashboard
+cp -R "$ROOT/port/app/art/controller" "$APP/Contents/Resources/controller"                        # controller editor artwork
 # App icon: the Icon Composer bundle (Slippi mark as a glass layer over the Slippi green) compiled by
 # actool into Assets.car + AppIcon.icns, so macOS 26 renders it as Liquid Glass. Older toolchains fall
 # back to the flat 1024px master.

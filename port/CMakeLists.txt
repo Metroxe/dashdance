@@ -486,7 +486,7 @@ if(MELEE_BUILD_PORT_METAL)
   # Aurora is only built here for its vendored SDL3.
   add_library(runtime_mac STATIC ${PORT_PORTABLE_RUNTIME_SOURCES} runtime/hle/slippi_text.cpp
     runtime/hle/slippi_http_apple.mm runtime/hle/slippi_login.cpp runtime/hle/slippi_history.cpp
-    runtime/host/window_sdl.cpp runtime/host/input_config.cpp runtime/host/dashboard.cpp runtime/host/audio_sdl.cpp runtime/host/haptics_apple.mm runtime/host/apple_power.mm runtime/host/controller_rate.mm runtime/host/game_menu.cpp runtime/host/notify_apple.mm runtime/hle/discord_rpc.cpp
+    runtime/host/window_sdl.cpp runtime/host/input_config.cpp runtime/host/dashboard.cpp runtime/host/audio_sdl.cpp runtime/host/haptics_apple.mm runtime/host/apple_power.mm runtime/host/controller_rate.mm runtime/host/game_menu.cpp runtime/host/notify_apple.mm runtime/hle/discord_rpc.cpp runtime/host/gc_diagram.cpp
     ${PORT_GC_ADAPTER_SOURCE} ${PORT_APPLE_LAUNCHER_SOURCE}
     runtime/gx/gx_metal.mm runtime/gx/gx_msl.cpp)
   set_source_files_properties(runtime/gx/gx_metal.mm runtime/hle/slippi_http_apple.mm runtime/host/haptics_apple.mm runtime/host/apple_power.mm runtime/host/controller_rate.mm runtime/host/notify_apple.mm
@@ -494,12 +494,13 @@ if(MELEE_BUILD_PORT_METAL)
   target_include_directories(runtime_mac PUBLIC runtime/ppc runtime/host runtime/hle runtime/gx
     "${PORT_GEN}" "${PROJECT_SOURCE_DIR}/native" third_party)
   target_compile_features(runtime_mac PUBLIC cxx_std_17)
+  target_compile_definitions(runtime_mac PRIVATE MELEE_SOURCE_ART_DIR="${CMAKE_CURRENT_SOURCE_DIR}/app/art/controller")   # controller artwork for the bare development binary
   target_compile_definitions(runtime_mac PRIVATE MELEE_PORT_VERSION="${MELEE_PORT_VERSION}")
   target_compile_definitions(runtime_mac PUBLIC
     MELEE_PORT_INPUT_MANIFEST_PATH="${MELEE_PORT_INPUT_MANIFEST}"
     MELEE_PORT_INPUT_MANIFEST_SHA256="${MELEE_PORT_INPUT_MANIFEST_SHA256}")
   target_link_libraries(runtime_mac PUBLIC native_animation port_build_options Threads::Threads port_enet
-    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation" "-framework Metal" "-framework QuartzCore" "-framework CoreText" "-framework CoreGraphics" "-framework GameController" "-framework UserNotifications" ${PORT_APPLE_UTI_FRAMEWORK}
+    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation" "-framework Metal" "-framework QuartzCore" "-framework CoreText" "-framework CoreGraphics" "-framework ImageIO" "-framework GameController" "-framework UserNotifications" ${PORT_APPLE_UTI_FRAMEWORK}
     ${AURORA_SDL3_TARGET})
   if(LIBUSB_FOUND AND NOT MELEE_DEVICE_TARGET)
     target_link_libraries(runtime_mac PUBLIC PkgConfig::LIBUSB)
@@ -530,6 +531,7 @@ if(MELEE_BUILD_PORT_METAL)
     add_custom_command(TARGET melee_port_mac POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/slippi_sys" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/slippi_sys"
       COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/app/icons/AppIcon.icon/Assets/glyph.png" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/SlippiMark.png"
+      COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/app/art/controller" "$<TARGET_BUNDLE_CONTENT_DIR:melee_port_mac>/controller"
       VERBATIM)
     if(MELEE_APPLE_ACTOOL_PLATFORM)
       # Liquid Glass app icon: the Icon Composer bundle compiled by actool into Assets.car (+ fallback PNGs).

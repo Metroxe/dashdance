@@ -8,10 +8,12 @@
 #import <objc/runtime.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include "dashboard.h"
+#include "gc_diagram.h"
 #include "host.h"
 #include "input_config.h"
 #include "mac_launcher.h"
 #include "slippi_login.h"
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -173,17 +175,79 @@ int display_max_hz() {
 + (UIButtonConfiguration*)glassConfiguration:(BOOL)prominent;
 @end
 
-// ---- Remap sheet: press a button on the controller for each GameCube control
+// ---- Controller editor: a live GameCube controller, bindings, deadzones, trigger point and rumble
+@interface MUDiagramUIView : UIView
+@property(nonatomic, copy) void (^onPick)(int part);
+- (host::DiagramState&)state;
+@end
+@implementation MUDiagramUIView { host::DiagramState _state; }
+- (instancetype)initWithFrame:(CGRect)frame {
+  self = [super initWithFrame:frame];
+  self.backgroundColor = UIColor.clearColor; self.opaque = NO; self.contentMode = UIViewContentModeRedraw;
+  return self;
+}
+- (host::DiagramState&)state { return _state; }
+- (void)drawRect:(CGRect)rect { host::gc_diagram_draw(UIGraphicsGetCurrentContext(), self.bounds, _state); }
+- (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
+  const CGPoint p = [touches.anyObject locationInView:self];
+  const int part = host::gc_diagram_hit(self.bounds, p, _state.directions);
+  if (part != host::DP_NONE && self.onPick) self.onPick(part);
+}
+@end
+
 @interface MURemapController : UIViewController
 @property(nonatomic) host::ControllerConfig config;
 @property(nonatomic, copy) NSString* controllerName;
-@property(nonatomic, copy) void (^onChange)(host::ControllerConfig);
+@property(nonatomic) MUDiagramUIView* diagram;
 @property(nonatomic) NSMutableArray<UIButton*>* rows;
+@property(nonatomic) UILabel* hint;
+@property(nonatomic) UISlider* stickSlider;
+@property(nonatomic) UISlider* cstickSlider;
+@property(nonatomic) UISlider* triggerSlider;
+@property(nonatomic) UILabel* stickValue;
+@property(nonatomic) UILabel* cstickValue;
+@property(nonatomic) UILabel* triggerValue;
+@property(nonatomic) UISwitch* swapSwitch;
+@property(nonatomic) UISwitch* rumbleSwitch;
+@property(nonatomic) CADisplayLink* link;
 @property(nonatomic) int capturing;
 @property(nonatomic) BOOL armed;
-@property(nonatomic) NSTimer* timer;
+@property(nonatomic) BOOL sequence;
 @end
+
 @implementation MURemapController
+- (UILabel*)text:(NSString*)t size:(CGFloat)size weight:(UIFontWeight)weight alpha:(CGFloat)alpha {
+  UILabel* l = [[UILabel alloc] init];
+  l.text = t; l.font = [UIFont systemFontOfSize:size weight:weight]; l.textColor = [UIColor colorWithWhite:1 alpha:alpha]; l.numberOfLines = 0;
+  return l;
+}
+- (UIButton*)action:(NSString*)title symbol:(NSString*)symbol prominent:(BOOL)prominent selector:(SEL)selector {
+  UIButtonConfiguration* c = [MULauncherController glassConfiguration:prominent];
+  c.title = title; c.image = [UIImage systemImageNamed:symbol]; c.imagePadding = 6; c.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+  if (prominent) { c.baseBackgroundColor = kYellow(); c.baseForegroundColor = UIColor.blackColor; } else c.baseForegroundColor = UIColor.whiteColor;
+  UIButton* b = [UIButton buttonWithConfiguration:c primaryAction:nil];
+  [b addTarget:self action:selector forControlEvents:UIControlEventTouchUpInside];
+  return b;
+}
+- (UIView*)row:(NSString*)name control:(UIView*)control value:(UILabel*)value {
+  UIStackView* row = [[UIStackView alloc] init]; row.axis = UILayoutConstraintAxisHorizontal; row.spacing = 12; row.alignment = UIStackViewAlignmentCenter;
+  UILabel* l = [self text:name size:15 weight:UIFontWeightRegular alpha:1];
+  [l setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+  [row addArrangedSubview:l]; [row addArrangedSubview:control];
+  if ([control isKindOfClass:UISlider.class]) [control.widthAnchor constraintEqualToConstant:170].active = YES;
+  if (value) {
+    value.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium]; value.textColor = [UIColor colorWithWhite:1 alpha:0.75]; value.textAlignment = NSTextAlignmentRight;
+    [value.widthAnchor constraintEqualToConstant:52].active = YES;
+    [row addArrangedSubview:value];
+  }
+  return row;
+}
+- (UISlider*)slider:(float)min max:(float)max value:(float)value {
+  UISlider* s = [[UISlider alloc] init];
+  s.minimumValue = min; s.maximumValue = max; s.value = value; s.tintColor = kYellow();
+  [s addTarget:self action:@selector(slidersChanged) forControlEvents:UIControlEventValueChanged];
+  return s;
+}
 - (void)viewDidLoad {
   [super viewDidLoad];
   self.view.backgroundColor = rgb(0.05, 0.06, 0.16);
@@ -192,7 +256,7 @@ int display_max_hz() {
   scroll.translatesAutoresizingMaskIntoConstraints = NO;
   [self.view addSubview:scroll];
   UIStackView* stack = [[UIStackView alloc] init];
-  stack.axis = UILayoutConstraintAxisVertical; stack.spacing = 10; stack.translatesAutoresizingMaskIntoConstraints = NO;
+  stack.axis = UILayoutConstraintAxisVertical; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = NO;
   [scroll addSubview:stack];
   [NSLayoutConstraint activateConstraints:@[
     [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor], [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
@@ -200,65 +264,119 @@ int display_max_hz() {
     [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:24], [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-24],
     [stack.leadingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.leadingAnchor constant:24], [stack.trailingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.trailingAnchor constant:-24]]];
   UILabel* title = [[UILabel alloc] init];
-  title.text = [NSString stringWithFormat:@"Remap %@", self.controllerName];
-  title.font = meleeFont(28, UIFontWeightBold); title.textColor = UIColor.whiteColor;
-  UILabel* hint = [[UILabel alloc] init];
-  hint.text = @"Tap a GameCube control, then press the button you want on your controller. Triggers can be bound to analog triggers or any button.";
-  hint.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote]; hint.textColor = [UIColor colorWithWhite:1 alpha:0.6]; hint.numberOfLines = 0;
-  [stack addArrangedSubview:title]; [stack addArrangedSubview:hint];
+  title.text = self.controllerName.uppercaseString; title.font = meleeFont(26, UIFontWeightBold); title.textColor = kYellow(); title.numberOfLines = 0;
+  self.hint = [self text:@"" size:13 weight:UIFontWeightRegular alpha:0.65];
+  self.diagram = [[MUDiagramUIView alloc] init];
+  [self.diagram.heightAnchor constraintEqualToAnchor:self.diagram.widthAnchor multiplier:1.0 / host::kDiagramAspect].active = YES;
+  __weak MURemapController* weakSelf = self;
+  self.diagram.onPick = ^(int part) { [weakSelf startCaptureAt:part sequence:NO]; };
+  for (UIView* v in @[title, self.hint, self.diagram]) [stack addArrangedSubview:v];
+  UIStackView* top = [[UIStackView alloc] init]; top.axis = UILayoutConstraintAxisHorizontal; top.spacing = 10; top.distribution = UIStackViewDistributionFillEqually;
+  [top addArrangedSubview:[self action:@"Map all buttons" symbol:@"list.number" prominent:NO selector:@selector(mapAll)]];
+  [top addArrangedSubview:[self action:@"Test rumble" symbol:@"waveform" prominent:NO selector:@selector(testRumble)]];
+  [stack addArrangedSubview:top];
   self.rows = [NSMutableArray array];
   for (int i = 0; i < host::GC_CTL_COUNT; ++i) {
     UIButtonConfiguration* c = [MULauncherController glassConfiguration:NO];
     c.cornerStyle = UIButtonConfigurationCornerStyleLarge; c.baseForegroundColor = UIColor.whiteColor;
-    c.contentInsets = NSDirectionalEdgeInsetsMake(12, 16, 12, 16);
+    c.contentInsets = NSDirectionalEdgeInsetsMake(11, 16, 11, 16);
     UIButton* b = [UIButton buttonWithConfiguration:c primaryAction:nil];
     b.tag = i; b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
-    [b addTarget:self action:@selector(startCapture:) forControlEvents:UIControlEventTouchUpInside];
+    [b addTarget:self action:@selector(rowTapped:) forControlEvents:UIControlEventTouchUpInside];
     [self.rows addObject:b]; [stack addArrangedSubview:b];
   }
-  UIStackView* actions = [[UIStackView alloc] init];
-  actions.axis = UILayoutConstraintAxisHorizontal; actions.spacing = 12; actions.distribution = UIStackViewDistributionFillEqually;
-  UIButtonConfiguration* rc = [MULauncherController glassConfiguration:NO]; rc.title = @"Reset to default"; rc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
-  UIButton* reset = [UIButton buttonWithConfiguration:rc primaryAction:nil];
-  [reset addTarget:self action:@selector(resetMapping) forControlEvents:UIControlEventTouchUpInside];
-  UIButtonConfiguration* sc = [MULauncherController glassConfiguration:NO]; sc.title = @"Swap sticks"; sc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
-  UIButton* swap = [UIButton buttonWithConfiguration:sc primaryAction:nil];
-  [swap addTarget:self action:@selector(swapSticks) forControlEvents:UIControlEventTouchUpInside];
-  UIButtonConfiguration* dc = [MULauncherController glassConfiguration:YES]; dc.title = @"Done"; dc.cornerStyle = UIButtonConfigurationCornerStyleCapsule; dc.baseBackgroundColor = kYellow(); dc.baseForegroundColor = UIColor.blackColor;
-  UIButton* done = [UIButton buttonWithConfiguration:dc primaryAction:nil];
-  [done addTarget:self action:@selector(finish) forControlEvents:UIControlEventTouchUpInside];
-  [actions addArrangedSubview:reset]; [actions addArrangedSubview:swap]; [actions addArrangedSubview:done];
-  [stack addArrangedSubview:actions];
+  const host::ControllerMap m = _config.map;
+  self.stickSlider = [self slider:0 max:60 value:m.stick_deadzone]; self.stickValue = [[UILabel alloc] init];
+  self.cstickSlider = [self slider:0 max:60 value:m.cstick_deadzone]; self.cstickValue = [[UILabel alloc] init];
+  self.triggerSlider = [self slider:20 max:100 value:m.trigger_press]; self.triggerValue = [[UILabel alloc] init];
+  [stack addArrangedSubview:[self row:@"Stick deadzone" control:self.stickSlider value:self.stickValue]];
+  [stack addArrangedSubview:[self row:@"C-stick deadzone" control:self.cstickSlider value:self.cstickValue]];
+  [stack addArrangedSubview:[self row:@"Trigger press point" control:self.triggerSlider value:self.triggerValue]];
+  self.swapSwitch = [[UISwitch alloc] init]; self.swapSwitch.on = m.swap_sticks; self.swapSwitch.onTintColor = kYellow();
+  [self.swapSwitch addTarget:self action:@selector(togglesChanged) forControlEvents:UIControlEventValueChanged];
+  self.rumbleSwitch = [[UISwitch alloc] init]; self.rumbleSwitch.on = m.rumble; self.rumbleSwitch.onTintColor = kYellow();
+  [self.rumbleSwitch addTarget:self action:@selector(togglesChanged) forControlEvents:UIControlEventValueChanged];
+  [stack addArrangedSubview:[self row:@"Swap sticks" control:self.swapSwitch value:nil]];
+  [stack addArrangedSubview:[self row:@"Rumble" control:self.rumbleSwitch value:nil]];
+  UIStackView* bottom = [[UIStackView alloc] init]; bottom.axis = UILayoutConstraintAxisHorizontal; bottom.spacing = 10; bottom.distribution = UIStackViewDistributionFillEqually;
+  [bottom addArrangedSubview:[self action:@"Reset to defaults" symbol:@"arrow.counterclockwise" prominent:NO selector:@selector(resetDefaults)]];
+  [bottom addArrangedSubview:[self action:@"Done" symbol:@"checkmark" prominent:YES selector:@selector(finish)]];
+  [stack addArrangedSubview:bottom];
   [self refresh];
-  self.timer = [NSTimer scheduledTimerWithTimeInterval:0.03 target:self selector:@selector(poll) userInfo:nil repeats:YES];
+  self.link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick)];
+  [self.link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
-- (void)viewDidDisappear:(BOOL)animated { [super viewDidDisappear:animated]; [self.timer invalidate]; self.timer = nil; }
+- (void)viewDidDisappear:(BOOL)animated { [super viewDidDisappear:animated]; [self.link invalidate]; self.link = nil; }
 - (void)refresh {
-  for (int i = 0; i < host::GC_CTL_COUNT; ++i) {
-    UIButton* b = self.rows[i];
+  for (UIButton* b in self.rows) {
+    const int i = (int)b.tag;
     UIButtonConfiguration* c = b.configuration;
-    NSString* bound = self.capturing == i ? @"Press a button…" : ns(host::physical_input_name(self.config.map.binding[i]));
-    NSMutableAttributedString* t = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"%s", host::kGcControlNames[i]] attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold], NSForegroundColorAttributeName: UIColor.whiteColor}];
-    [t appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"    %@", bound] attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:15], NSForegroundColorAttributeName: self.capturing == i ? kYellow() : [UIColor colorWithWhite:1 alpha:0.6]}]];
+    NSString* bound = self.capturing == i ? @"Press a button…" : ns(host::physical_input_name(_config.map.binding[i]));
+    NSMutableAttributedString* t = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithUTF8String:host::kGcControlNames[i]]
+                                                                          attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold], NSForegroundColorAttributeName: UIColor.whiteColor}];
+    [t appendAttributedString:[[NSAttributedString alloc] initWithString:[@"    " stringByAppendingString:bound]
+                                                              attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:15], NSForegroundColorAttributeName: self.capturing == i ? kYellow() : [UIColor colorWithWhite:1 alpha:0.6]}]];
     c.attributedTitle = t;
     c.baseBackgroundColor = self.capturing == i ? rgb(0.97, 0.79, 0.28, 0.25) : [UIColor colorWithWhite:1 alpha:0.08];
     b.configuration = c;
   }
+  self.hint.text = self.capturing >= 0 ? [NSString stringWithFormat:@"Press the button you want for %s.", host::kGcControlNames[self.capturing]]
+                                       : @"Tap a button on the controller or in the list, then press the input you want. Map all goes through every button in order. Changes are saved as you go.";
+  self.stickValue.text = [NSString stringWithFormat:@"%d%%", _config.map.stick_deadzone];
+  self.cstickValue.text = [NSString stringWithFormat:@"%d%%", _config.map.cstick_deadzone];
+  self.triggerValue.text = [NSString stringWithFormat:@"%d%%", _config.map.trigger_press];
 }
-- (void)startCapture:(UIButton*)sender { self.capturing = (int)sender.tag; self.armed = NO; [self refresh]; }
-- (void)poll {
-  if (self.capturing < 0) return;
-  const int input = host::window_capture_input(self.config.guid);
-  if (!self.armed) { if (input == host::kUnbound) self.armed = YES; return; }   // wait for everything to be released first
-  if (input == host::kUnbound) return;
+- (void)tick {
+  host::DiagramState& s = self.diagram.state;
+  host::ControllerLiveState live;
+  if (host::window_controller_state(_config.guid, live)) host::gc_diagram_from_pad(s, _config.map, live);
+  else { s.stick_deadzone = _config.map.stick_deadzone / 100.0f; s.cstick_deadzone = _config.map.cstick_deadzone / 100.0f; }
+  s.selected = self.capturing;
+  s.pulse = 0.5f + 0.5f * (float)std::sin(CACurrentMediaTime() * 6.0);
+  if (self.capturing >= 0) {
+    const int input = host::window_capture_input(_config.guid);
+    if (!self.armed) { if (input == host::kUnbound) self.armed = YES; }   // wait for the previous press to be released
+    else if (input != host::kUnbound) [self assign:input];
+  }
+  [self.diagram setNeedsDisplay];
+}
+- (void)assign:(int)input {
+  for (int j = 0; j < host::GC_CTL_COUNT; ++j) if (j != self.capturing && _config.map.binding[j] == input) _config.map.binding[j] = host::kUnbound;
   _config.map.binding[self.capturing] = input;
-  self.capturing = -1;
-  host::upsert_controller_config(self.config);
-  if (self.onChange) self.onChange(self.config);
+  host::upsert_controller_config(_config);
+  haptic_impact();
+  if (self.sequence && self.capturing + 1 < host::GC_CTL_COUNT) { self.capturing += 1; self.armed = NO; }
+  else { self.capturing = -1; self.sequence = NO; }
   [self refresh];
 }
-- (void)resetMapping { _config.map = host::ControllerMap::defaults(); host::upsert_controller_config(self.config); if (self.onChange) self.onChange(self.config); [self refresh]; }
-- (void)swapSticks { _config.map.swap_sticks = !_config.map.swap_sticks; host::upsert_controller_config(self.config); if (self.onChange) self.onChange(self.config); }
+- (void)startCaptureAt:(int)part sequence:(BOOL)sequence {
+  if (part < 0 || part >= host::GC_CTL_COUNT) return;
+  self.capturing = part; self.sequence = sequence; self.armed = NO;
+  [self refresh];
+}
+- (void)rowTapped:(UIButton*)sender { [self startCaptureAt:(int)sender.tag sequence:NO]; }
+- (void)mapAll { [self startCaptureAt:0 sequence:YES]; }
+- (void)slidersChanged {
+  _config.map.stick_deadzone = (int)std::lround(self.stickSlider.value);
+  _config.map.cstick_deadzone = (int)std::lround(self.cstickSlider.value);
+  _config.map.trigger_press = (int)std::lround(self.triggerSlider.value);
+  host::upsert_controller_config(_config);
+  [self refresh];
+}
+- (void)togglesChanged {
+  _config.map.swap_sticks = self.swapSwitch.on;
+  _config.map.rumble = self.rumbleSwitch.on;
+  host::upsert_controller_config(_config);
+}
+- (void)testRumble { host::window_test_rumble(_config.guid); haptic_impact(); }
+- (void)resetDefaults {
+  _config.map = host::ControllerMap::defaults();
+  host::upsert_controller_config(_config);
+  self.stickSlider.value = _config.map.stick_deadzone; self.cstickSlider.value = _config.map.cstick_deadzone; self.triggerSlider.value = _config.map.trigger_press;
+  [self.swapSwitch setOn:NO animated:YES]; [self.rumbleSwitch setOn:YES animated:YES];
+  self.capturing = -1; self.sequence = NO;
+  [self refresh];
+}
 - (void)finish { [self dismissViewControllerAnimated:YES completion:nil]; }
 @end
 

@@ -9,11 +9,14 @@
 #import <SceneKit/SceneKit.h>
 #import <objc/runtime.h>
 #include "dashboard.h"
+#include "gc_diagram.h"
 #include "host.h"
 #include "input_config.h"
 #include "mac_launcher.h"
 #include "slippi_login.h"
+#include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -34,6 +37,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
 }
 
 @class MULauncherWindow;
+@class MUControllerEditor;
 // Menu bar extra (NSStatusItem): the Slippi mark in the menu bar with the player's rank, rating and
 // record, the last games, and the actions that make sense from anywhere: Play, show the dashboard,
 // sign out, quit. Built once per process; the dashboard feeds it, the game keeps it.
@@ -290,6 +294,7 @@ API_AVAILABLE(macos(26.0))
 @property(nonatomic) NSWindow* window;
 @property(nonatomic) NSStackView* stack;
 @property(nonatomic) NSScrollView* scroll;
+@property(nonatomic) id editor;   // the open controller editor sheet
 @property(nonatomic) NSArray<NSView*>* entrance;
 @property(nonatomic, copy) NSString* startupError;
 @property(nonatomic) BOOL busy, closed;
@@ -311,8 +316,297 @@ API_AVAILABLE(macos(26.0))
 @property(nonatomic) NSSwitch* discordSwitch; @property(nonatomic) NSSwitch* discordRankSwitch; @property(nonatomic) NSTextField* regionLabel;
 @property(nonatomic) NSSegmentedControl* scaleControl; @property(nonatomic) NSSegmentedControl* anisoControl; @property(nonatomic) NSSwitch* vsyncSwitch; @property(nonatomic) NSSwitch* fullscreenSwitch; @property(nonatomic) NSSwitch* widescreenSwitch; @property(nonatomic) NSSlider* sharpness; @property(nonatomic) NSSwitch* onlineSwitch;
 - (void)acceptDroppedDisc:(NSString*)path;
+- (void)openEditor:(MUControllerEditor*)editor;
 - (void)play;
 - (void)signOut;
+@end
+
+// ---- Controller editor (sheet): a live GameCube controller, bindings, deadzones, trigger point and rumble; or the keyboard layout
+@interface MUDiagramView : NSView
+@property(nonatomic, copy) void (^onPick)(int part);
+- (host::DiagramState&)state;
+@end
+@implementation MUDiagramView { host::DiagramState _state; }
+- (BOOL)isFlipped { return YES; }
+- (BOOL)acceptsFirstMouse:(NSEvent*)event { return YES; }
+- (host::DiagramState&)state { return _state; }
+- (void)drawRect:(NSRect)dirty { host::gc_diagram_draw(NSGraphicsContext.currentContext.CGContext, self.bounds, _state); }
+- (void)mouseDown:(NSEvent*)event {
+  const NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+  const int part = host::gc_diagram_hit(self.bounds, p, _state.directions);
+  if (part != host::DP_NONE && self.onPick) self.onPick(part);
+}
+@end
+
+@interface MUControllerEditor : NSObject
+@property(nonatomic) NSWindow* sheet;
+@property(nonatomic, copy) NSString* guid;   // nil: the keyboard
+@property(nonatomic, copy) void (^completion)(void);
+@property(nonatomic) MUDiagramView* diagram;
+@property(nonatomic) NSMutableArray<NSButton*>* rows;
+@property(nonatomic) NSTextField* hint;
+@property(nonatomic) NSSlider* stickSlider; @property(nonatomic) NSSlider* cstickSlider; @property(nonatomic) NSSlider* triggerSlider; @property(nonatomic) NSSlider* modifierSlider;
+@property(nonatomic) NSTextField* stickValue; @property(nonatomic) NSTextField* cstickValue; @property(nonatomic) NSTextField* triggerValue; @property(nonatomic) NSTextField* modifierValue;
+@property(nonatomic) NSSwitch* swapSwitch; @property(nonatomic) NSSwitch* rumbleSwitch;
+@property(nonatomic) NSTimer* timer;
+@property(nonatomic) id monitor;
+@property(nonatomic) int capturing;
+@property(nonatomic) BOOL armed; @property(nonatomic) BOOL sequence;
+- (instancetype)initWithGuid:(NSString*)guid name:(NSString*)name;
+- (void)presentOn:(NSWindow*)parent;
+@end
+
+@implementation MUControllerEditor { bool _held[512]; }
+- (BOOL)isKeyboard { return self.guid == nil; }
+- (int)controlCount { return self.isKeyboard ? host::KB_COUNT : host::GC_CTL_COUNT; }
+- (host::ControllerConfig)config {
+  host::ControllerConfig c;
+  if (const host::ControllerConfig* e = host::controller_config_for(self.guid.UTF8String ?: "")) c = *e;
+  c.guid = self.guid.UTF8String ?: "";
+  return c;
+}
+- (NSSlider*)slider:(double)min max:(double)max value:(double)value {
+  NSSlider* s = [NSSlider sliderWithValue:value minValue:min maxValue:max target:self action:@selector(slidersChanged)];
+  s.continuous = YES; [s.widthAnchor constraintEqualToConstant:190].active = YES;
+  return s;
+}
+- (NSTextField*)valueLabel {
+  NSTextField* l = [NSTextField labelWithString:@""];
+  l.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightMedium]; l.textColor = [NSColor colorWithWhite:1 alpha:0.75]; l.alignment = NSTextAlignmentRight;
+  [l.widthAnchor constraintEqualToConstant:44].active = YES;
+  return l;
+}
+- (NSStackView*)labeled:(NSString*)text control:(NSView*)control value:(NSView*)value {
+  NSStackView* row = [[NSStackView alloc] init]; row.orientation = NSUserInterfaceLayoutOrientationHorizontal; row.spacing = 10; row.alignment = NSLayoutAttributeCenterY;
+  NSTextField* l = [NSTextField labelWithString:text]; l.font = [NSFont systemFontOfSize:13]; l.textColor = NSColor.whiteColor;
+  NSView* spacer = [[NSView alloc] init]; [spacer setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
+  [row addArrangedSubview:l]; [row addArrangedSubview:spacer]; [row addArrangedSubview:control];
+  if (value) [row addArrangedSubview:value];
+  return row;
+}
+- (NSButton*)plainButton:(NSString*)title symbol:(NSString*)name action:(SEL)action {
+  NSButton* b = [NSButton buttonWithTitle:title target:self action:action];
+  b.image = symbol(name, 12, NSFontWeightSemibold); b.imagePosition = NSImageLeading; b.controlSize = NSControlSizeLarge; b.bezelStyle = NSBezelStyleRounded;
+  if (@available(macOS 26.0, *)) b.bezelStyle = NSBezelStyleGlass;
+  return b;
+}
+- (instancetype)initWithGuid:(NSString*)guid name:(NSString*)name {
+  self = [super init];
+  self.guid = guid; self.capturing = -1; std::memset(_held, 0, sizeof _held);
+  const BOOL keyboard = guid == nil;
+  const NSRect frame = NSMakeRect(0, 0, 920, 700);
+  self.sheet = [[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+  self.sheet.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+  self.sheet.backgroundColor = rgb(0.05, 0.06, 0.15);
+  NSView* content = self.sheet.contentView;
+
+  NSStackView* left = [[MUColumn alloc] init]; left.spacing = 12; left.translatesAutoresizingMaskIntoConstraints = NO;
+  NSTextField* title = [NSTextField labelWithString:keyboard ? @"KEYBOARD" : name.uppercaseString];
+  title.font = meleeFont(22); title.textColor = kYellow();
+  self.hint = label(@"", 12, NSFontWeightRegular, 0.7);
+  self.diagram = [[MUDiagramView alloc] init];
+  self.diagram.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.diagram.heightAnchor constraintEqualToAnchor:self.diagram.widthAnchor multiplier:1.0 / host::kDiagramAspect].active = YES;
+  __weak MUControllerEditor* weakSelf = self;
+  self.diagram.onPick = ^(int part) { [weakSelf startCapture:part sequence:NO]; };
+  for (NSView* v in @[title, self.hint, self.diagram]) [left addArrangedSubview:v];
+  if (keyboard) {
+    self.modifierSlider = [self slider:20 max:90 value:host::keyboard_map().modifier_percent]; self.modifierValue = [self valueLabel];
+    [left addArrangedSubview:[self labeled:@"Modifier stick amount" control:self.modifierSlider value:self.modifierValue]];
+  } else {
+    const host::ControllerMap m = [self config].map;
+    self.stickSlider = [self slider:0 max:60 value:m.stick_deadzone]; self.stickValue = [self valueLabel];
+    self.cstickSlider = [self slider:0 max:60 value:m.cstick_deadzone]; self.cstickValue = [self valueLabel];
+    self.triggerSlider = [self slider:20 max:100 value:m.trigger_press]; self.triggerValue = [self valueLabel];
+    [left addArrangedSubview:[self labeled:@"Stick deadzone" control:self.stickSlider value:self.stickValue]];
+    [left addArrangedSubview:[self labeled:@"C-stick deadzone" control:self.cstickSlider value:self.cstickValue]];
+    [left addArrangedSubview:[self labeled:@"Trigger press point" control:self.triggerSlider value:self.triggerValue]];
+    self.swapSwitch = [[NSSwitch alloc] init]; self.swapSwitch.state = m.swap_sticks ? NSControlStateValueOn : NSControlStateValueOff; self.swapSwitch.target = self; self.swapSwitch.action = @selector(togglesChanged);
+    self.rumbleSwitch = [[NSSwitch alloc] init]; self.rumbleSwitch.state = m.rumble ? NSControlStateValueOn : NSControlStateValueOff; self.rumbleSwitch.target = self; self.rumbleSwitch.action = @selector(togglesChanged);
+    [left addArrangedSubview:[self labeled:@"Swap sticks" control:self.swapSwitch value:nil]];
+    [left addArrangedSubview:[self labeled:@"Rumble" control:self.rumbleSwitch value:nil]];
+  }
+  NSStackView* buttons = [[NSStackView alloc] init]; buttons.orientation = NSUserInterfaceLayoutOrientationHorizontal; buttons.spacing = 8;
+  [buttons addArrangedSubview:[self plainButton:keyboard ? @"Map all keys" : @"Map all buttons" symbol:@"list.number" action:@selector(mapAll)]];
+  if (!keyboard) [buttons addArrangedSubview:[self plainButton:@"Test rumble" symbol:@"waveform" action:@selector(testRumble)]];
+  [buttons addArrangedSubview:[self plainButton:@"Reset to defaults" symbol:@"arrow.counterclockwise" action:@selector(resetDefaults)]];
+  [left addArrangedSubview:buttons];
+
+  NSScrollView* scroll = [[NSScrollView alloc] init];
+  scroll.drawsBackground = NO; scroll.hasVerticalScroller = YES; scroll.translatesAutoresizingMaskIntoConstraints = NO;
+  NSView* doc = [[MUFlippedView alloc] init]; doc.translatesAutoresizingMaskIntoConstraints = NO;
+  scroll.documentView = doc;
+  NSStackView* list = [[MUColumn alloc] init]; list.spacing = 6; list.translatesAutoresizingMaskIntoConstraints = NO;
+  [doc addSubview:list];
+  self.rows = [NSMutableArray array];
+  for (int i = 0; i < [self controlCount]; ++i) {
+    NSButton* b = [NSButton buttonWithTitle:@"" target:self action:@selector(rowClicked:)];
+    b.bezelStyle = NSBezelStyleRounded; b.controlSize = NSControlSizeLarge; b.tag = i; b.alignment = NSTextAlignmentLeft;
+    if (@available(macOS 26.0, *)) b.bezelStyle = NSBezelStyleGlass;
+    [list addArrangedSubview:b]; [self.rows addObject:b];
+  }
+  NSButton* done = [NSButton buttonWithTitle:@"Done" target:self action:@selector(close)];
+  done.bezelStyle = NSBezelStyleRounded; done.controlSize = NSControlSizeLarge; done.bezelColor = kYellow(); done.contentTintColor = kInk();
+  if (@available(macOS 26.0, *)) done.bezelStyle = NSBezelStyleGlass;
+  done.translatesAutoresizingMaskIntoConstraints = NO;
+  [content addSubview:left]; [content addSubview:scroll]; [content addSubview:done];
+  [NSLayoutConstraint activateConstraints:@[
+    [left.topAnchor constraintEqualToAnchor:content.topAnchor constant:22], [left.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:24],
+    [left.widthAnchor constraintEqualToConstant:480],
+    [scroll.topAnchor constraintEqualToAnchor:content.topAnchor constant:22], [scroll.leadingAnchor constraintEqualToAnchor:left.trailingAnchor constant:22],
+    [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-24], [scroll.bottomAnchor constraintEqualToAnchor:done.topAnchor constant:-14],
+    [done.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-24], [done.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-18],
+    [doc.widthAnchor constraintEqualToAnchor:scroll.contentView.widthAnchor],
+    [list.topAnchor constraintEqualToAnchor:doc.topAnchor], [list.bottomAnchor constraintEqualToAnchor:doc.bottomAnchor],
+    [list.leadingAnchor constraintEqualToAnchor:doc.leadingAnchor], [list.trailingAnchor constraintEqualToAnchor:doc.trailingAnchor]]];
+  [self refresh];
+  return self;
+}
+- (void)presentOn:(NSWindow*)parent {
+  __weak MUControllerEditor* weakSelf = self;
+  self.monitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged)
+                                                       handler:^NSEvent*(NSEvent* e) { MUControllerEditor* me = weakSelf; return me ? [me handleKey:e] : e; }];
+  self.timer = [NSTimer timerWithTimeInterval:1.0 / 60.0 target:self selector:@selector(tick) userInfo:nil repeats:YES];
+  [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];   // the dashboard runs modally
+  [parent beginSheet:self.sheet completionHandler:nil];
+}
+- (NSEvent*)handleKey:(NSEvent*)e {
+  if (e.window != self.sheet) return e;
+  const int code = host::scancode_from_mac_keycode(e.keyCode);
+  if (e.type == NSEventTypeFlagsChanged) {
+    NSEventModifierFlags mask = 0;
+    switch (e.keyCode) {
+      case 56: case 60: mask = NSEventModifierFlagShift; break;
+      case 59: case 62: mask = NSEventModifierFlagControl; break;
+      case 58: case 61: mask = NSEventModifierFlagOption; break;
+      case 55: case 54: mask = NSEventModifierFlagCommand; break;
+      case 57: mask = NSEventModifierFlagCapsLock; break;
+    }
+    const bool down = mask && (e.modifierFlags & mask);
+    if (code > 0 && code < 512) _held[code] = down;
+    if (down && self.isKeyboard && self.capturing >= 0) [self assignKey:code];
+    return e;
+  }
+  if (e.type == NSEventTypeKeyDown && e.keyCode == 53) {   // Escape: stop assigning, or close
+    if (self.capturing >= 0) { self.capturing = -1; self.sequence = NO; [self refresh]; } else [self close];
+    return nil;
+  }
+  if (!self.isKeyboard || (e.modifierFlags & NSEventModifierFlagCommand)) return e;
+  if (e.type == NSEventTypeKeyDown) {
+    if (e.isARepeat) return nil;
+    if (code > 0 && code < 512) _held[code] = true;
+    if (self.capturing >= 0) [self assignKey:code];
+    return nil;   // keys belong to the layout while this sheet is up
+  }
+  if (code > 0 && code < 512) _held[code] = false;
+  return nil;
+}
+- (void)assignKey:(int)code {
+  if (code <= 0 || self.capturing < 0) return;
+  host::KeyboardMap k = host::keyboard_map();
+  for (int j = 0; j < host::KB_COUNT; ++j) if (j != self.capturing && k.key[j] == code) k.key[j] = 0;   // one key, one control
+  k.key[self.capturing] = code;
+  host::set_keyboard_map(k);
+  [self advance];
+}
+- (void)advance {
+  if (self.sequence && self.capturing + 1 < [self controlCount]) { self.capturing += 1; self.armed = NO; }
+  else { self.capturing = -1; self.sequence = NO; }
+  [self refresh];
+}
+- (void)tick {
+  host::DiagramState& s = self.diagram.state;
+  if (self.isKeyboard) host::gc_diagram_from_keyboard(s, host::keyboard_map(), _held, 512);
+  else {
+    const host::ControllerConfig cfg = [self config];
+    host::ControllerLiveState live;
+    if (host::window_controller_state(cfg.guid, live)) host::gc_diagram_from_pad(s, cfg.map, live);
+    else { s.stick_deadzone = cfg.map.stick_deadzone / 100.0f; s.cstick_deadzone = cfg.map.cstick_deadzone / 100.0f; }
+    if (self.capturing >= 0) {
+      const int input = host::window_capture_input(cfg.guid);
+      if (!self.armed) { if (input == host::kUnbound) self.armed = YES; }   // wait for the previous press to be released
+      else if (input != host::kUnbound) {
+        host::ControllerConfig c = cfg;
+        for (int j = 0; j < host::GC_CTL_COUNT; ++j) if (j != self.capturing && c.map.binding[j] == input) c.map.binding[j] = host::kUnbound;
+        c.map.binding[self.capturing] = input;
+        host::upsert_controller_config(c);
+        [self advance];
+      }
+    }
+  }
+  s.selected = self.capturing < host::DP_COUNT ? self.capturing : host::DP_NONE;
+  s.pulse = 0.5f + 0.5f * (float)std::sin(CACurrentMediaTime() * 6.0);
+  self.diagram.needsDisplay = YES;
+}
+- (void)refresh {
+  const host::ControllerConfig cfg = [self config];
+  const host::KeyboardMap& k = host::keyboard_map();
+  for (NSButton* b in self.rows) {
+    const int i = (int)b.tag;
+    NSString* name = ns(self.isKeyboard ? host::kKeyboardControlNames[i] : host::kGcControlNames[i]);
+    NSString* bound = self.capturing == i ? (self.isKeyboard ? @"Press a key…" : @"Press a button…")
+                                          : ns(self.isKeyboard ? host::key_name(k.key[i]) : host::physical_input_name(cfg.map.binding[i]));
+    NSMutableAttributedString* t = [[NSMutableAttributedString alloc] initWithString:name attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold], NSForegroundColorAttributeName: NSColor.whiteColor}];
+    [t appendAttributedString:[[NSAttributedString alloc] initWithString:[@"    " stringByAppendingString:bound]
+                                                              attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13], NSForegroundColorAttributeName: self.capturing == i ? kYellow() : [NSColor colorWithWhite:1 alpha:0.6]}]];
+    b.attributedTitle = t;
+  }
+  if (self.capturing >= 0) {
+    NSString* name = ns(self.isKeyboard ? host::kKeyboardControlNames[self.capturing] : host::kGcControlNames[self.capturing]);
+    self.hint.stringValue = [NSString stringWithFormat:@"%@ for %@. Escape stops.", self.isKeyboard ? @"Press the key" : @"Press the button", name];
+  } else {
+    self.hint.stringValue = @"Click a control on the picture or in the list, then press the input you want. Changes are saved as you go.";
+  }
+  if (self.isKeyboard) self.modifierValue.stringValue = [NSString stringWithFormat:@"%d%%", k.modifier_percent];
+  else {
+    self.stickValue.stringValue = [NSString stringWithFormat:@"%d%%", cfg.map.stick_deadzone];
+    self.cstickValue.stringValue = [NSString stringWithFormat:@"%d%%", cfg.map.cstick_deadzone];
+    self.triggerValue.stringValue = [NSString stringWithFormat:@"%d%%", cfg.map.trigger_press];
+  }
+}
+- (void)slidersChanged {
+  if (self.isKeyboard) {
+    host::KeyboardMap k = host::keyboard_map(); k.modifier_percent = (int)std::lround(self.modifierSlider.doubleValue); host::set_keyboard_map(k);
+  } else {
+    host::ControllerConfig c = [self config];
+    c.map.stick_deadzone = (int)std::lround(self.stickSlider.doubleValue);
+    c.map.cstick_deadzone = (int)std::lround(self.cstickSlider.doubleValue);
+    c.map.trigger_press = (int)std::lround(self.triggerSlider.doubleValue);
+    host::upsert_controller_config(c);
+  }
+  [self refresh];
+}
+- (void)togglesChanged {
+  host::ControllerConfig c = [self config];
+  c.map.swap_sticks = self.swapSwitch.state == NSControlStateValueOn;
+  c.map.rumble = self.rumbleSwitch.state == NSControlStateValueOn;
+  host::upsert_controller_config(c);
+}
+- (void)testRumble { host::window_test_rumble(self.guid.UTF8String ?: ""); }
+- (void)resetDefaults {
+  if (self.isKeyboard) { host::set_keyboard_map(host::KeyboardMap::defaults()); self.modifierSlider.doubleValue = host::keyboard_map().modifier_percent; }
+  else {
+    host::ControllerConfig c = [self config]; c.map = host::ControllerMap::defaults(); host::upsert_controller_config(c);
+    self.stickSlider.doubleValue = c.map.stick_deadzone; self.cstickSlider.doubleValue = c.map.cstick_deadzone; self.triggerSlider.doubleValue = c.map.trigger_press;
+    self.swapSwitch.state = NSControlStateValueOff; self.rumbleSwitch.state = NSControlStateValueOn;
+  }
+  self.capturing = -1; self.sequence = NO;
+  [self refresh];
+}
+- (void)mapAll { [self startCapture:0 sequence:YES]; }
+- (void)rowClicked:(NSButton*)sender { [self startCapture:(int)sender.tag sequence:NO]; }
+- (void)startCapture:(int)control sequence:(BOOL)sequence {
+  if (control < 0 || control >= [self controlCount]) return;
+  self.capturing = control; self.sequence = sequence; self.armed = NO;
+  [self refresh];
+}
+- (void)close {
+  [self.timer invalidate]; self.timer = nil;
+  if (self.monitor) { [NSEvent removeMonitor:self.monitor]; self.monitor = nil; }
+  if (self.sheet.sheetParent) [self.sheet.sheetParent endSheet:self.sheet];
+  [self.sheet orderOut:nil];
+  if (self.completion) self.completion();
+}
 @end
 
 @implementation MUDropView
@@ -626,7 +920,7 @@ API_AVAILABLE(macos(26.0))
   NSStackView* s = [self stackIn:card header:@"CONTROLLERS" symbol:@"gamecontroller"];
   self.controllersStack = [[MUColumn alloc] init]; self.controllersStack.spacing = 8;
   [s addArrangedSubview:self.controllersStack];
-  [s addArrangedSubview:label(@"A Wii U / Switch GameCube adapter (WUP-028, or a Mayflash in Wii U mode) is read directly over USB and asked to poll at 1000 Hz, the rate shown here is what your port actually delivers. Bluetooth and USB pads (PlayStation, Xbox, Switch Pro, MFi) pair through System Settings › Bluetooth or a cable. Assign each one a port and remap buttons here; the keyboard always works.", 11, NSFontWeightRegular, 0.6)];
+  [s addArrangedSubview:label(@"A Wii U / Switch GameCube adapter (WUP-028, or a Mayflash in Wii U mode) is read directly over USB and asked to poll at 1000 Hz, the rate shown here is what your port actually delivers. Bluetooth and USB pads (PlayStation, Xbox, Switch Pro, MFi) pair through System Settings › Bluetooth or a cable. Configure opens a live view of the controller: remap buttons, set stick deadzones, the trigger press point and rumble. The keyboard layout is configured the same way.", 11, NSFontWeightRegular, 0.6)];
   return card;
 }
 - (NSView*)buildDisplay {
@@ -759,73 +1053,48 @@ API_AVAILABLE(macos(26.0))
     [self.gamesStack addArrangedSubview:row];
   }
 }
+- (NSStackView*)controllerRow:(NSString*)iconName title:(NSString*)title subtitle:(NSString*)subtitle {
+  NSStackView* row = [[NSStackView alloc] init]; row.orientation = NSUserInterfaceLayoutOrientationHorizontal; row.spacing = 10; row.alignment = NSLayoutAttributeCenterY;
+  NSImageView* icon = [NSImageView imageViewWithImage:symbol(iconName, 15, NSFontWeightMedium)];
+  icon.contentTintColor = kYellow(); [icon.widthAnchor constraintEqualToConstant:22].active = YES;
+  NSStackView* text = [[NSStackView alloc] init]; text.orientation = NSUserInterfaceLayoutOrientationVertical; text.alignment = NSLayoutAttributeLeading; text.spacing = 1;
+  [text addArrangedSubview:label(title, 13, NSFontWeightSemibold, 1)];
+  [text addArrangedSubview:label(subtitle, 11, NSFontWeightRegular, 0.6)];
+  [text setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+  [row addArrangedSubview:icon]; [row addArrangedSubview:text];
+  return row;
+}
+- (NSString*)keyboardSummary {
+  const host::KeyboardMap& k = host::keyboard_map();
+  return [NSString stringWithFormat:@"Stick %s %s %s %s  ·  A %s  ·  B %s  ·  hold %s to walk and tilt",
+          host::key_name(k.key[host::KB_STICK_UP]).c_str(), host::key_name(k.key[host::KB_STICK_LEFT]).c_str(), host::key_name(k.key[host::KB_STICK_DOWN]).c_str(),
+          host::key_name(k.key[host::KB_STICK_RIGHT]).c_str(), host::key_name(k.key[host::GC_CTL_A]).c_str(), host::key_name(k.key[host::GC_CTL_B]).c_str(),
+          host::key_name(k.key[host::KB_MODIFIER]).c_str()];
+}
 - (void)refreshControllers {
   std::vector<host::ControllerInfo> pads = host::window_list_controllers();
   self.controllerCount = pads.size();
   for (NSView* v in self.controllersStack.arrangedSubviews) [v removeFromSuperview];
-  self.remapButtons = nil;
-  if (pads.empty()) [self.controllersStack addArrangedSubview:label(@"No controller connected. Keyboard: arrows move, Z/X/C/V = A/B/X/Y, Q/E = L/R, Return = Start.", 13, NSFontWeightRegular, 0.7)];
+  NSStackView* keyboard = [self controllerRow:@"keyboard" title:@"Keyboard" subtitle:[self keyboardSummary]];
+  [keyboard addArrangedSubview:[self button:@"Configure…" symbol:@"slider.horizontal.3" action:@selector(configureKeyboard)]];
+  [self.controllersStack addArrangedSubview:keyboard];
   for (const host::ControllerInfo& pad : pads) {
-    NSStackView* row = [[NSStackView alloc] init]; row.orientation = NSUserInterfaceLayoutOrientationHorizontal; row.spacing = 10; row.alignment = NSLayoutAttributeCenterY;
-    NSImageView* icon = [NSImageView imageViewWithImage:symbol(pad.is_gamecube_adapter ? @"cable.connector" : @"gamecontroller.fill", 15, NSFontWeightMedium)];
-    icon.contentTintColor = kYellow(); [icon.widthAnchor constraintEqualToConstant:22].active = YES;
-    NSStackView* text = [[NSStackView alloc] init]; text.orientation = NSUserInterfaceLayoutOrientationVertical; text.alignment = NSLayoutAttributeLeading; text.spacing = 1;
-    [text addArrangedSubview:label(ns(pad.name), 13, NSFontWeightSemibold, 1)];
-    [text addArrangedSubview:label(ns(controller_rate_line(pad)), 11, NSFontWeightRegular, 0.6)];
-    NSView* name = text;
-    [name setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-    NSString* guid = ns(pad.guid);
-    NSPopUpButton* port = [[NSPopUpButton alloc] init]; port.controlSize = NSControlSizeRegular;
-    [port addItemsWithTitles:@[@"Auto port", @"Port 1", @"Port 2", @"Port 3", @"Port 4"]];
-    [port selectItemAtIndex:MAX(0, MIN(4, pad.assigned_port))];
-    port.target = self; port.action = @selector(portChanged:); objc_setAssociatedObject(port, "guid", guid, OBJC_ASSOCIATION_COPY);
-    [row addArrangedSubview:icon]; [row addArrangedSubview:name];
-    if (!pad.is_gamecube_adapter) [row addArrangedSubview:port];
+    NSStackView* row = [self controllerRow:(pad.is_gamecube_adapter ? @"cable.connector" : @"gamecontroller.fill") title:ns(pad.name) subtitle:ns(controller_rate_line(pad))];
     if (!pad.is_gamecube_adapter) {
-      NSButton* remap = [NSButton buttonWithTitle:[self.remapGuid isEqualToString:guid] ? @"Done" : @"Remap…" target:self action:@selector(toggleRemap:)];
-      remap.bezelStyle = NSBezelStyleRounded; objc_setAssociatedObject(remap, "guid", guid, OBJC_ASSOCIATION_COPY);
-      [row addArrangedSubview:remap];
+      NSString* guid = ns(pad.guid);
+      NSPopUpButton* port = [[NSPopUpButton alloc] init]; port.controlSize = NSControlSizeRegular;
+      [port addItemsWithTitles:@[@"Auto port", @"Port 1", @"Port 2", @"Port 3", @"Port 4"]];
+      [port selectItemAtIndex:MAX(0, MIN(4, pad.assigned_port))];
+      port.target = self; port.action = @selector(portChanged:); objc_setAssociatedObject(port, "guid", guid, OBJC_ASSOCIATION_COPY);
+      NSButton* configure = [self button:@"Configure…" symbol:@"slider.horizontal.3" action:@selector(configureController:)];
+      objc_setAssociatedObject(configure, "guid", guid, OBJC_ASSOCIATION_COPY);
+      objc_setAssociatedObject(configure, "name", ns(pad.name), OBJC_ASSOCIATION_COPY);
+      [row addArrangedSubview:port]; [row addArrangedSubview:configure];
     }
     [self.controllersStack addArrangedSubview:row];
-    if ([self.remapGuid isEqualToString:guid]) [self.controllersStack addArrangedSubview:[self remapPanel:pad]];
   }
+  if (pads.empty()) [self.controllersStack addArrangedSubview:label(@"Pair or plug in a controller and it appears here.", 12, NSFontWeightRegular, 0.55)];
   [self refreshSteps];
-}
-- (NSView*)remapPanel:(const host::ControllerInfo&)pad {
-  NSBox* box = [[NSBox alloc] init]; box.boxType = NSBoxCustom; box.cornerRadius = 10; box.borderWidth = 0; box.fillColor = [NSColor colorWithWhite:1 alpha:0.06]; box.contentViewMargins = NSMakeSize(12, 10);
-  NSStackView* s = [[MUColumn alloc] init]; s.spacing = 6;
-  [s addArrangedSubview:label(@"Click a GameCube control, then press the button you want on the controller.", 11, NSFontWeightRegular, 0.6)];
-  NSMutableArray* buttons = [NSMutableArray array];
-  NSStackView* grid = nil;
-  for (int i = 0; i < host::GC_CTL_COUNT; ++i) {
-    if (i % 3 == 0) { grid = [[NSStackView alloc] init]; grid.orientation = NSUserInterfaceLayoutOrientationHorizontal; grid.distribution = NSStackViewDistributionFillEqually; grid.spacing = 6; [s addArrangedSubview:grid]; }
-    NSButton* b = [NSButton buttonWithTitle:@"" target:self action:@selector(startCapture:)];
-    b.bezelStyle = NSBezelStyleRounded; b.tag = i; b.alignment = NSTextAlignmentLeft;
-    [grid addArrangedSubview:b]; [buttons addObject:b];
-  }
-  NSStackView* actions = [[NSStackView alloc] init]; actions.orientation = NSUserInterfaceLayoutOrientationHorizontal; actions.spacing = 8;
-  NSButton* reset = [NSButton buttonWithTitle:@"Reset to default" target:self action:@selector(resetMapping)]; reset.bezelStyle = NSBezelStyleRounded;
-  NSButton* swap = [NSButton buttonWithTitle:@"Swap sticks" target:self action:@selector(swapSticks)]; swap.bezelStyle = NSBezelStyleRounded;
-  [actions addArrangedSubview:reset]; [actions addArrangedSubview:swap];
-  [s addArrangedSubview:actions];
-  box.contentView = s;
-  self.remapButtons = buttons;
-  [self refreshRemap];
-  return box;
-}
-- (host::ControllerConfig)remapConfig {
-  host::ControllerConfig cfg;
-  if (const host::ControllerConfig* c = host::controller_config_for(self.remapGuid.UTF8String ?: "")) cfg = *c;
-  cfg.guid = self.remapGuid.UTF8String ?: "";
-  return cfg;
-}
-- (void)refreshRemap {
-  host::ControllerConfig cfg = [self remapConfig];
-  for (NSButton* b in self.remapButtons) {
-    const int i = (int)b.tag;
-    b.title = [NSString stringWithFormat:@"%s:  %@", host::kGcControlNames[i], self.capturing == i ? @"press…" : ns(host::physical_input_name(cfg.map.binding[i]))];
-    b.contentTintColor = self.capturing == i ? kYellow() : nil;
-  }
 }
 - (void)tick {
   if (self.closed) return;
@@ -834,15 +1103,6 @@ API_AVAILABLE(macos(26.0))
     for (const host::ControllerInfo& p : host::window_list_controllers()) sig += p.guid + ":" + std::to_string((int)(p.report_hz / 10)) + ":" + std::to_string(p.adapter_ports) + ";";
     if (sig != self.controllerSignature) { self.controllerSignature = sig; [self refreshControllers]; }
   }
-  if (self.capturing < 0 || !self.remapGuid) return;
-  const int input = host::window_capture_input(self.remapGuid.UTF8String);
-  if (!self.armed) { if (input == host::kUnbound) self.armed = YES; return; }
-  if (input == host::kUnbound) return;
-  host::ControllerConfig cfg = [self remapConfig];
-  cfg.map.binding[self.capturing] = input;
-  host::upsert_controller_config(cfg);
-  self.capturing = -1;
-  [self refreshRemap];
 }
 - (void)portChanged:(NSPopUpButton*)sender {
   NSString* guid = objc_getAssociatedObject(sender, "guid");
@@ -851,14 +1111,17 @@ API_AVAILABLE(macos(26.0))
   host::upsert_controller_config(cfg);
   [self refreshControllers];
 }
-- (void)toggleRemap:(NSButton*)sender {
-  NSString* guid = objc_getAssociatedObject(sender, "guid");
-  self.remapGuid = [self.remapGuid isEqualToString:guid] ? nil : guid; self.capturing = -1;
-  [self refreshControllers];
+- (void)configureController:(NSButton*)sender {
+  [self openEditor:[[MUControllerEditor alloc] initWithGuid:objc_getAssociatedObject(sender, "guid") name:objc_getAssociatedObject(sender, "name")]];
 }
-- (void)startCapture:(NSButton*)sender { self.capturing = (int)sender.tag; self.armed = NO; [self refreshRemap]; }
-- (void)resetMapping { host::ControllerConfig cfg = [self remapConfig]; cfg.map = host::ControllerMap::defaults(); host::upsert_controller_config(cfg); [self refreshRemap]; }
-- (void)swapSticks { host::ControllerConfig cfg = [self remapConfig]; cfg.map.swap_sticks = !cfg.map.swap_sticks; host::upsert_controller_config(cfg); [self refreshRemap]; }
+- (void)configureKeyboard { [self openEditor:[[MUControllerEditor alloc] initWithGuid:nil name:@"Keyboard"]]; }
+- (void)openEditor:(MUControllerEditor*)editor {
+  if (self.editor) return;
+  self.editor = editor;
+  __weak MULauncherWindow* weakSelf = self;
+  editor.completion = ^{ MULauncherWindow* me = weakSelf; if (!me) return; me.editor = nil; [me refreshControllers]; };
+  [editor presentOn:self.window];
+}
 - (void)refreshDisc {
   if (self.settings->iso.empty()) {
     self.discName.stringValue = @"No disc chosen";
@@ -1048,6 +1311,16 @@ bool launcher_run(LauncherSettings& settings, const std::string& error) {
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [g_status.item.button performClick:nil]; });
     [launcher.window makeKeyAndOrderFront:nil];
     [launcher animateIn];
+    if (const char* which = std::getenv("MELEE_OPEN_EDITOR")) {   // screenshot aid: "keyboard", or "pad:<guid>:<name>"
+      const std::string w = which;
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (w == "keyboard") [launcher openEditor:[[MUControllerEditor alloc] initWithGuid:nil name:@"Keyboard"]];
+        else if (w.rfind("pad:", 0) == 0) {
+          const size_t colon = w.find(':', 4);
+          [launcher openEditor:[[MUControllerEditor alloc] initWithGuid:ns(w.substr(4, colon == std::string::npos ? std::string::npos : colon - 4)) name:ns(colon == std::string::npos ? "Controller" : w.substr(colon + 1))]];
+        }
+      });
+    }
     if (const char* scroll = std::getenv("MELEE_LAUNCHER_SCROLL"))   // screenshot aid: start scrolled down by N points
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSScrollView* sv = launcher.scroll;   // held directly: the glass container reparents its content view

@@ -105,6 +105,8 @@ Like the decomp ports (Ship of Harkinian and friends), iSlippi has a settings ov
 
 ### Controls
 
+The default keyboard layout; every key can be changed.
+
 | GameCube | Keyboard |
 |---|---|
 | Control stick | Arrow keys |
@@ -113,8 +115,11 @@ Like the decomp ports (Ship of Harkinian and friends), iSlippi has a settings ov
 | L / R / Z | Q / W / E |
 | D-pad | T F G H |
 | Start | Return |
+| Walk / tilt modifier (hold) | Left Shift |
 
 Any controller SDL recognises works out of the box, over Bluetooth or a cable: PlayStation, Xbox, Switch Pro, MFi and most USB pads. Ports and button mappings are managed from the Controllers card on the dashboard, which also shows each controller's measured report rate (move a stick for a second and it settles).
+
+**Configuring controls.** Every controller, and the keyboard, has a Configure button on the dashboard. It opens a live GameCube controller: whatever you press lights up, the sticks follow your thumbs inside their deadzone rings, and the triggers fill as you squeeze. Click a button on the picture or in the list and press the input you want, or use Map all to go through every control in order. Per controller you also set the stick and C-stick deadzones, the trigger press point (how far an analog trigger travels before it also counts as a digital L or R press), rumble, and swapped sticks. The keyboard maps the twelve buttons, both sticks' four directions and a walk/tilt modifier key with its stick amount. The same settings are in the in-game menu under Controls, including a step-by-step remap you can run without leaving the game. Everything is saved per controller.
 
 ### GameCube controllers and the adapter (macOS)
 
@@ -294,7 +299,7 @@ The upstream project, [Hero88go/melee-unlocked](https://github.com/Hero88go/mele
 
 ## Credits and legal
 
-The app icon and the dashboard mark use the Slippi logo from the [Slippi Launcher](https://github.com/project-slippi/slippi-launcher) (GPL-3.0). Slippi is a trademark of its authors; this is a community project and the logo is used to identify what the app connects to, not to claim affiliation. Design references: [dimillian/Skills](https://github.com/dimillian/Skills) (Liquid Glass, controls, haptics and review checklists), Apple's Liquid Glass documentation as collected in [xcode-27-system-prompts](https://github.com/artemnovichkov/xcode-27-system-prompts), and [PwrGit](https://github.com/pwrdrvr/PwrGit/pull/196) for the Icon Composer bundle layout.
+The GameCube controller in the controller editors is the indigo controller from [ControllerOverlays](https://github.com/datkat21/ControllerOverlays) by Kat21, GPL-3.0 (see `port/app/art/controller/README.md`); builds that include it are distributed under GPL-3.0, which the project's GPL-2.0-or-later licence allows. The app icon and the dashboard mark use the Slippi logo from the [Slippi Launcher](https://github.com/project-slippi/slippi-launcher) (GPL-3.0). Slippi is a trademark of its authors; this is a community project and the logo is used to identify what the app connects to, not to claim affiliation. Design references: [dimillian/Skills](https://github.com/dimillian/Skills) (Liquid Glass, controls, haptics and review checklists), Apple's Liquid Glass documentation as collected in [xcode-27-system-prompts](https://github.com/artemnovichkov/xcode-27-system-prompts), and [PwrGit](https://github.com/pwrdrvr/PwrGit/pull/196) for the Icon Composer bundle layout.
 
 Built on the work of the [Slippi](https://slippi.gg) team, the [Dolphin](https://dolphin-emu.org) project, [SDL](https://libsdl.org), [Aurora](https://github.com/encounter/aurora) (build tooling and the diagnostic renderer), the [doldecomp/melee](https://github.com/doldecomp/melee) contributors, and [Hero88go/melee-unlocked](https://github.com/Hero88go/melee-unlocked). This project is not affiliated with or endorsed by the Slippi team, Nintendo or HAL Laboratory.
 

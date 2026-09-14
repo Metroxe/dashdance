@@ -139,6 +139,7 @@ static void save_launcher_ini(const fs::path& path, const host::LauncherSettings
       << "\nfullscreen=" << (settings.fullscreen ? 1 : 0) << "\nvolume=" << settings.volume << "\nhud=" << (settings.hud ? 1 : 0)
       << "\ndiscord=" << (settings.discord_enabled ? 1 : 0) << "\ndiscord_rank=" << (settings.discord_show_rank ? 1 : 0) << "\n";
   for (const host::ControllerConfig& c : host::controller_configs()) out << "controller." << c.guid << "=" << c.port << "|" << c.map.serialize() << "\n";
+  out << "keyboard=" << host::keyboard_map().serialize() << "\n";
 }
 
 int main(int argc, char** argv) {
@@ -235,6 +236,7 @@ int main(int argc, char** argv) {
       else if (const char* v = value("hud=")) settings.hud = *v == '1';
       else if (const char* v = value("discord=")) settings.discord_enabled = *v == '1';
       else if (const char* v = value("discord_rank=")) settings.discord_show_rank = *v == '1';
+      else if (const char* v = value("keyboard=")) host::set_keyboard_map(host::KeyboardMap::parse(v));
       else if (const char* v = value("controller.")) {   // controller.<guid>=<port>|<mapping>
         std::string rest = v; size_t eq = rest.find('='), bar = rest.find('|', eq == std::string::npos ? 0 : eq);
         if (eq != std::string::npos && bar != std::string::npos) {
