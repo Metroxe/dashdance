@@ -318,7 +318,7 @@ API_AVAILABLE(macos(26.0))
 @property(nonatomic) NSView* rankedCard; @property(nonatomic) NSTextField* rankLabel; @property(nonatomic) NSTextField* ratingLabel; @property(nonatomic) NSTextField* recordLabel; @property(nonatomic) NSView* winTrack; @property(nonatomic) NSView* winBar; @property(nonatomic) NSLayoutConstraint* winBarWidth; @property(nonatomic) NSTextField* placementLabel; @property(nonatomic) NSTextField* mainsLabel;
 @property(nonatomic) NSView* gamesCard; @property(nonatomic) NSStackView* gamesStack;
 // controllers
-@property(nonatomic) NSStackView* controllersStack; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic) std::string controllerSignature; @property(nonatomic) unsigned tickCount; @property(nonatomic, copy) NSString* remapGuid; @property(nonatomic) int capturing; @property(nonatomic) BOOL armed; @property(nonatomic) NSArray<NSButton*>* remapButtons;
+@property(nonatomic) NSStackView* readinessStack; @property(nonatomic) std::string readinessSignature; @property(nonatomic) NSStackView* controllersStack; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic) std::string controllerSignature; @property(nonatomic) unsigned tickCount; @property(nonatomic, copy) NSString* remapGuid; @property(nonatomic) int capturing; @property(nonatomic) BOOL armed; @property(nonatomic) NSArray<NSButton*>* remapButtons;
 // display
 @property(nonatomic) NSSwitch* discordSwitch; @property(nonatomic) NSSwitch* discordRankSwitch; @property(nonatomic) NSTextField* regionLabel;
 @property(nonatomic) NSSegmentedControl* scaleControl; @property(nonatomic) NSSegmentedControl* anisoControl; @property(nonatomic) NSSwitch* vsyncSwitch; @property(nonatomic) NSSwitch* fullscreenSwitch; @property(nonatomic) NSSwitch* widescreenSwitch; @property(nonatomic) NSSlider* sharpness; @property(nonatomic) NSSwitch* onlineSwitch; @property(nonatomic) NSSegmentedControl* delayControl;
@@ -870,6 +870,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   NSView* account = [self buildAccount];
   NSView* disc = [self buildDisc];
   NSView* controllers = [self buildControllers];
+  NSView* readiness = [self buildReadiness];
   NSView* display = [self buildDisplay];
   NSView* discordCard = [self buildDiscord];
   NSView* regionCard = [self buildRegion];
@@ -884,7 +885,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   NSStackView* leftCards = [[MUColumn alloc] init]; leftCards.spacing = 14;
   NSStackView* rightCards = [[MUColumn alloc] init]; rightCards.spacing = 14;
   for (NSView* v in @[self.stepsCard, self.rankedCard, self.gamesCard, account]) [leftCards addArrangedSubview:v];                 // you
-  for (NSView* v in @[disc, controllers, display, regionCard, discordCard]) [rightCards addArrangedSubview:v];                    // the setup
+  for (NSView* v in @[readiness, disc, controllers, display, regionCard, discordCard]) [rightCards addArrangedSubview:v];                    // the setup
   self.cardColumns = [NSStackView stackViewWithViews:@[leftCards, rightCards]];
   self.cardColumns.orientation = NSUserInterfaceLayoutOrientationVertical; self.cardColumns.alignment = NSLayoutAttributeLeading; self.cardColumns.spacing = 14;
   self.stackedWidths = @[[leftCards.widthAnchor constraintEqualToAnchor:self.cardColumns.widthAnchor], [rightCards.widthAnchor constraintEqualToAnchor:self.cardColumns.widthAnchor]];
@@ -893,7 +894,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   [self.stack setCustomSpacing:26 afterView:hero];
   self.entrance = @[hero, self.stepsCard, self.rankedCard, self.gamesCard, account, disc, controllers, display, regionCard, discordCard, self.playButton];
   for (NSView* v in self.entrance) v.alphaValue = 0;
-  [self refreshDisc]; [self refreshAccount]; [self refreshControllers]; [self refreshSteps];
+  [self refreshDisc]; [self refreshAccount]; [self refreshControllers]; [self refreshSteps]; [self refreshReadiness];
   [self updateColumns];
   [self loadDashboard];
   self.timer = [NSTimer timerWithTimeInterval:0.03 target:self selector:@selector(tick) userInfo:nil repeats:YES];
@@ -1128,6 +1129,35 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   [s addArrangedSubview:label(@"Connect a Controller walks you through pairing a PlayStation, Xbox, Switch Pro or other Bluetooth controller. A Wii U / Switch GameCube adapter (WUP-028, or a Mayflash in Wii U mode) is read directly over USB and asked to poll at 1000 Hz; the rate shown is what your port actually delivers. Configure opens a live view of the controller: remap buttons, set stick deadzones, the trigger press point and rumble. The keyboard layout is configured the same way.", 11, NSFontWeightRegular, 0.6)];
   return card;
 }
+- (NSView*)buildReadiness {
+  NSView* card = [self card];
+  NSStackView* s = [self stackIn:card header:@"READY TO COMPETE" symbol:@"trophy"];
+  self.readinessStack = [[MUColumn alloc] init]; self.readinessStack.spacing = 7;
+  [s addArrangedSubview:self.readinessStack];
+  return card;
+}
+// What in this setup costs latency, checked about once a second (display, full screen, network, controller, delay).
+- (void)refreshReadiness {
+  if (!self.readinessStack) return;
+  const int delay = self.delayControl ? (int)self.delayControl.selectedSegment + 1 : self.settings->online_delay;
+  const bool fullscreen = self.fullscreenSwitch ? self.fullscreenSwitch.state == NSControlStateValueOn : self.settings->fullscreen;
+  const std::vector<host::ReadinessItem> items = host::competitive_readiness(self.settings->display_hz, fullscreen, delay);
+  std::string sig;
+  for (const host::ReadinessItem& i : items) sig += (i.ok ? "1" : "0") + i.text + ";";
+  if (sig == self.readinessSignature) return;
+  self.readinessSignature = sig;
+  for (NSView* v in self.readinessStack.arrangedSubviews) [v removeFromSuperview];
+  for (const host::ReadinessItem& i : items) {
+    NSStackView* row = [[NSStackView alloc] init]; row.orientation = NSUserInterfaceLayoutOrientationHorizontal; row.spacing = 8; row.alignment = NSLayoutAttributeFirstBaseline;
+    NSImageView* icon = [NSImageView imageViewWithImage:symbol(i.ok ? @"checkmark.circle.fill" : @"exclamationmark.triangle.fill", 12, NSFontWeightSemibold)];
+    icon.contentTintColor = i.ok ? rgb(0.30, 0.85, 0.45) : kYellow(); [icon.widthAnchor constraintEqualToConstant:18].active = YES;
+    NSTextField* text = [NSTextField wrappingLabelWithString:ns(i.text)];
+    text.font = [NSFont systemFontOfSize:12]; text.textColor = [NSColor colorWithWhite:1 alpha:i.ok ? 0.75 : 0.95]; text.preferredMaxLayoutWidth = 520;
+    [text setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [row addArrangedSubview:icon]; [row addArrangedSubview:text];
+    [self.readinessStack addArrangedSubview:row];
+  }
+}
 - (NSView*)buildDisplay {
   NSView* card = [self card];
   NSStackView* s = [self stackIn:card header:@"DISPLAY & PERFORMANCE" symbol:@"speedometer"];
@@ -1310,6 +1340,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
     std::string sig;
     for (const host::ControllerInfo& p : host::window_list_controllers()) sig += p.guid + ":" + std::to_string((int)(p.report_hz / 10)) + ":" + std::to_string(p.adapter_ports) + ";";
     if (sig != self.controllerSignature) { self.controllerSignature = sig; [self refreshControllers]; }
+    [self refreshReadiness];
   }
 }
 - (void)portChanged:(NSPopUpButton*)sender {

@@ -347,6 +347,8 @@ int main(int argc, char** argv) {
     gfx.cache_dir = cache_dir;
     backend = gx::create_metal_backend(layer, client_w, client_h, gfx);
     host::log("display: %.0f Hz refresh; the game simulates at 60 Hz and each frame is shown on the next refresh slot", host::window_refresh_rate());
+    for (const host::ReadinessItem& item : host::competitive_readiness((int)host::window_refresh_rate(), settings.fullscreen || fullscreen_arg, online.delay))
+      host::log("readiness: %s %s", item.ok ? "ok  " : "note", item.text.c_str());
     host::window_set_resize_callback([backend](int w, int h) { gx::metal_resize(backend, w, h); });
     if (settings.fullscreen || fullscreen_arg) host::window_set_fullscreen(true);
     gx::metal_set_overlay(backend, host::game_overlay);

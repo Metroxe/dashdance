@@ -11,9 +11,13 @@
 #import <AVFoundation/AVFoundation.h>
 #import <QuartzCore/QuartzCore.h>
 #endif
+#import <Network/Network.h>
 #include "host.h"
 #include "gx_metal.h"
+#include "input_config.h"
+#include <algorithm>
 #include <atomic>
+#include <cstdio>
 
 #if !TARGET_OS_OSX && !TARGET_OS_VISION
 // Holds the display at its highest refresh rate while a game runs. A ProMotion iPhone or iPad otherwise lowers the panel
@@ -45,6 +49,25 @@ namespace {
 id g_activity = nil;
 std::atomic<bool> g_low_power{false}, g_bluetooth_audio{false};
 id g_power_observer = nil, g_route_observer = nil;
+std::atomic<int> g_net_kind{-1};   // -1 not known yet, 0 offline, 1 wired, 2 Wi-Fi, 3 mobile data, 4 other (VPN and such)
+nw_path_monitor_t g_path_monitor = nil;
+void network_monitor_start() {
+  if (g_path_monitor) return;
+  g_path_monitor = nw_path_monitor_create();
+  nw_path_monitor_set_queue(g_path_monitor, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+  dispatch_semaphore_t first = dispatch_semaphore_create(0);
+  nw_path_monitor_set_update_handler(g_path_monitor, ^(nw_path_t path) {
+    int kind = 0;
+    if (nw_path_get_status(path) == nw_path_status_satisfied)
+      kind = nw_path_uses_interface_type(path, nw_interface_type_wired) ? 1 : nw_path_uses_interface_type(path, nw_interface_type_wifi) ? 2
+           : nw_path_uses_interface_type(path, nw_interface_type_cellular) ? 3 : 4;
+    const bool was_unknown = g_net_kind.load() < 0;
+    g_net_kind = kind;
+    if (was_unknown) dispatch_semaphore_signal(first);
+  });
+  nw_path_monitor_start(g_path_monitor);
+  dispatch_semaphore_wait(first, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)));   // the first answer takes milliseconds; the checklist should include it
+}
 #if !TARGET_OS_OSX && !TARGET_OS_VISION   // Vision Pro composites every window at the headset's fixed rate: nothing to raise
 MUDisplayPacer* g_pacer = nil;
 NSInteger screen_max_hz() {
@@ -87,6 +110,59 @@ void apply_caps() {
 }
 }  // namespace
 
+std::vector<ReadinessItem> competitive_readiness(int display_hz, bool fullscreen, int online_delay) {
+  network_monitor_start();
+  std::vector<ReadinessItem> v;
+  char b[200];
+  if (display_hz >= 100) { std::snprintf(b, sizeof b, "%d Hz display: each frame reaches the screen on the next fast refresh", display_hz); v.push_back({true, b}); }
+  else { std::snprintf(b, sizeof b, "%d Hz display: a 120 Hz display shows each frame up to 8 ms sooner", display_hz); v.push_back({false, b}); }
+#if TARGET_OS_OSX
+  v.push_back(fullscreen ? ReadinessItem{true, "Starts in full screen: about 15 ms faster than a window"}
+                         : ReadinessItem{false, "Starts in a window: full screen is about 15 ms faster"});
+#else
+  (void)fullscreen;
+#endif
+  if (NSProcessInfo.processInfo.lowPowerModeEnabled) v.push_back({false, "Low Power Mode is on: it limits the display and slows the CPU"});
+  switch (g_net_kind.load()) {
+    case 1: v.push_back({true, "Wired network: the steadiest connection for online play"}); break;
+    case 2: v.push_back({false, "Wi-Fi: a wired Ethernet connection rolls back less"}); break;
+    case 3: v.push_back({false, "Mobile data: expect more rollback; Wi-Fi or Ethernet is steadier"}); break;
+    case 0: v.push_back({false, "No network connection: online play is unavailable"}); break;
+    case 4: v.push_back({true, "Connected to the network"}); break;
+    default: break;
+  }
+  bool adapter = false, pad = false, wired = false;
+  double adapter_hz = 0, pad_hz = 0;
+  for (const ControllerInfo& c : window_list_controllers()) {
+    if (c.is_gamecube_adapter) { adapter = true; adapter_hz = c.report_hz; }
+    else { pad = true; pad_hz = std::max(pad_hz, c.report_hz); wired = wired || c.wired; }
+  }
+  if (adapter) {
+    if (adapter_hz >= 900) { std::snprintf(b, sizeof b, "GameCube adapter polling at %.0f Hz", adapter_hz); v.push_back({true, b}); }
+    else if (adapter_hz > 0) { std::snprintf(b, sizeof b, "GameCube adapter at %.0f Hz: another USB port usually gives 1000 Hz", adapter_hz); v.push_back({false, b}); }
+    else v.push_back({true, "GameCube adapter connected (measuring its polling rate)"});
+  } else if (pad) {
+    if (pad_hz <= 0) v.push_back({true, "Controller connected: move a stick to measure its report rate"});
+    else if (wired) { std::snprintf(b, sizeof b, "Wired controller reporting at %.0f Hz", pad_hz); v.push_back({true, b}); }
+    else { std::snprintf(b, sizeof b, "Bluetooth controller at %.0f Hz: a wired USB controller responds sooner", pad_hz); v.push_back({false, b}); }
+  } else {
+#if TARGET_OS_OSX
+    v.push_back({false, "No controller: playing on the keyboard"});
+#else
+    v.push_back({false, "Touch controls only: a controller is far more precise"});
+#endif
+  }
+#if !TARGET_OS_OSX
+  if (route_is_wireless()) v.push_back({false, "Bluetooth audio lags the picture: use wired or built-in sound"});
+#endif
+  if (online_delay <= 1) v.push_back({true, "Online input delay 1 frame: the lowest latency"});
+  else if (online_delay == 2) v.push_back({true, "Online input delay 2 frames: Slippi's default"});
+  else { std::snprintf(b, sizeof b, "Online input delay %d frames adds %.0f ms: 2 is Slippi's default", online_delay, online_delay * 16.667); v.push_back({false, b}); }
+  const NSProcessInfoThermalState heat = NSProcessInfo.processInfo.thermalState;
+  if (heat == NSProcessInfoThermalStateSerious || heat == NSProcessInfoThermalStateCritical)
+    v.push_back({false, "Device is hot: resolution steps down to hold 60 frames per second"});
+  return v;
+}
 const char* latency_warning() {
   const bool lpm = g_low_power.load(), bt = g_bluetooth_audio.load();
   return lpm && bt ? "Low Power Mode on  ·  Bluetooth audio lags" : lpm ? "Low Power Mode on" : bt ? "Bluetooth audio lags" : "";

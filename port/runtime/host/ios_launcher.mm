@@ -642,7 +642,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
 // games
 @property(nonatomic) UIView* gamesCard; @property(nonatomic) UIStackView* gamesStack;
 // controllers
-@property(nonatomic) UIStackView* controllersStack; @property(nonatomic) NSTimer* controllerTimer; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic) std::string controllerSignature;
+@property(nonatomic) UIStackView* readinessStack; @property(nonatomic) std::string readinessSignature; @property(nonatomic) UIStackView* controllersStack; @property(nonatomic) NSTimer* controllerTimer; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic) std::string controllerSignature;
 // display
 @property(nonatomic) UILabel* regionLabel;
 @property(nonatomic) UISegmentedControl* scaleControl; @property(nonatomic) UISegmentedControl* anisoControl; @property(nonatomic) UISwitch* vsyncSwitch; @property(nonatomic) UISwitch* widescreenSwitch; @property(nonatomic) UISlider* sharpnessSlider; @property(nonatomic) UISwitch* onlineSwitch; @property(nonatomic) UISegmentedControl* delayControl;
@@ -703,6 +703,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   self.rankedCard = [self buildRanked];
   self.gamesCard = [self buildGames];
   UIView* controllers = [self buildControllers];
+  UIView* readiness = [self buildReadiness];
   UIView* display = [self buildDisplay];
   UIView* touch = [self buildTouch];
   UIView* regionCard = [self buildRegion];
@@ -714,14 +715,14 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   UIStackView* leftCards = [[UIStackView alloc] init]; leftCards.axis = UILayoutConstraintAxisVertical; leftCards.spacing = 16;
   UIStackView* rightCards = [[UIStackView alloc] init]; rightCards.axis = UILayoutConstraintAxisVertical; rightCards.spacing = 16;
   for (UIView* v in @[self.stepsCard, self.rankedCard, self.gamesCard, self.accountCard]) [leftCards addArrangedSubview:v];   // you
-  for (UIView* v in @[disc, controllers, display, touch, regionCard]) [rightCards addArrangedSubview:v];                      // the setup
+  for (UIView* v in @[readiness, disc, controllers, display, touch, regionCard]) [rightCards addArrangedSubview:v];                      // the setup
   self.cardColumns = [[UIStackView alloc] initWithArrangedSubviews:@[leftCards, rightCards]];
   self.cardColumns.axis = UILayoutConstraintAxisVertical; self.cardColumns.spacing = 16;
   for (UIView* v in @[hero, self.cardColumns, self.playButton, footer]) [self.stack addArrangedSubview:v];
   [self.stack setCustomSpacing:28 afterView:hero];
   self.entrance = @[hero, self.stepsCard, self.rankedCard, self.gamesCard, self.accountCard, disc, controllers, display, touch, regionCard, self.playButton];
   for (UIView* v in self.entrance) { v.alpha = 0; v.transform = CGAffineTransformMakeTranslation(0, 24); }
-  [self refreshDisc]; [self refreshAccount]; [self refreshControllers]; [self refreshSteps];
+  [self refreshDisc]; [self refreshAccount]; [self refreshControllers]; [self refreshSteps]; [self refreshReadiness];
   [self loadDashboard];
   self.controllerTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(controllerTick) userInfo:nil repeats:YES];
 #if !TARGET_OS_VISION
@@ -1102,6 +1103,37 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   [s addArrangedSubview:help];
   return card;
 }
+- (UIView*)buildReadiness {
+  UIView* card = [self panel];
+  UIStackView* s = [self stackIn:card];
+  [s addArrangedSubview:[self header:@"READY TO COMPETE" symbol:@"trophy"]];
+  self.readinessStack = [[UIStackView alloc] init]; self.readinessStack.axis = UILayoutConstraintAxisVertical; self.readinessStack.spacing = 8;
+  [s addArrangedSubview:self.readinessStack];
+  return card;
+}
+// What in this setup costs latency, checked about once a second (display, network, controller, audio, delay, heat).
+- (void)refreshReadiness {
+  if (!self.readinessStack) return;
+  const int delay = self.delayControl ? (int)self.delayControl.selectedSegmentIndex + 1 : self.settings->online_delay;
+  const std::vector<host::ReadinessItem> items = host::competitive_readiness(display_max_hz(), false, delay);
+  std::string sig;
+  for (const host::ReadinessItem& i : items) sig += (i.ok ? "1" : "0") + i.text + ";";
+  if (sig == self.readinessSignature) return;
+  self.readinessSignature = sig;
+  for (UIView* v in self.readinessStack.arrangedSubviews) [v removeFromSuperview];
+  for (const host::ReadinessItem& i : items) {
+    UIStackView* row = [[UIStackView alloc] init]; row.axis = UILayoutConstraintAxisHorizontal; row.spacing = 10; row.alignment = UIStackViewAlignmentFirstBaseline;
+    UIImageView* icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:i.ok ? @"checkmark.circle.fill" : @"exclamationmark.triangle.fill"]];
+    icon.tintColor = i.ok ? rgb(0.30, 0.85, 0.45) : kYellow(); icon.contentMode = UIViewContentModeScaleAspectFit;
+    icon.preferredSymbolConfiguration = [UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold];
+    [icon.widthAnchor constraintEqualToConstant:20].active = YES; [icon setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    UILabel* text = [self label:ns(i.text) size:14 weight:UIFontWeightRegular alpha:i.ok ? 0.75 : 0.95];
+    text.lineBreakMode = NSLineBreakByWordWrapping;
+    [text setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
+    [row addArrangedSubview:icon]; [row addArrangedSubview:text];
+    [self.readinessStack addArrangedSubview:row];
+  }
+}
 - (UIView*)buildDisplay {
   UIView* card = [self panel];
   UIStackView* s = [self stackIn:card];
@@ -1312,6 +1344,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   std::string sig;
   for (const host::ControllerInfo& p : host::window_list_controllers()) sig += p.guid + ":" + std::to_string((int)(p.report_hz / 10)) + ":" + std::to_string(p.adapter_ports) + ";";
   if (sig != self.controllerSignature) { self.controllerSignature = sig; [self refreshControllers]; }
+  [self refreshReadiness];
 }
 - (void)refreshDisc {
   std::vector<std::string> discs = documents_discs(nullptr);

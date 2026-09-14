@@ -1,6 +1,10 @@
 // Slippi Online networking (see slippi_net.h). Wire-compatible port of Dolphin's
 // SlippiNetplayClient, SlippiMatchmaking and the user record.
 // SPDX-License-Identifier: GPL-2.0-or-later
+#if defined(__APPLE__)
+#include <pthread.h>
+#include <pthread/qos.h>
+#endif
 #include "slippi_net.h"
 #if !defined(MELEE_PORT_OFFLINE) || !MELEE_PORT_OFFLINE
 #include "host.h"
@@ -394,6 +398,11 @@ void NetplayClient::SendAsync(std::unique_ptr<Packet> packet) {
 }
 
 void NetplayClient::ThreadFunc() {
+#if defined(__APPLE__)
+  // Opponent inputs are handled the moment they arrive: keep this thread on performance cores (an efficiency core can
+  // take milliseconds to wake on an iPhone), whatever thread happened to create it.
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
   uint64_t start_time = time_ms();
   const uint64_t timeout = 8000;
   std::vector<bool> connections(remote_player_count_, false);
@@ -737,6 +746,9 @@ void Matchmaking::FindMatch(MatchSearchSettings settings) {
   thread_ = std::thread(&Matchmaking::MatchmakeThread, this);
 }
 void Matchmaking::MatchmakeThread() {
+#if defined(__APPLE__)
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);   // the handshake that starts a match should not wait behind background work
+#endif
   while (IsSearching()) {
     if (is_mm_terminated_) break;
     switch (state_.load()) {

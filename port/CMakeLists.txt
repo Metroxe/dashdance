@@ -500,7 +500,7 @@ if(MELEE_BUILD_PORT_METAL)
     MELEE_PORT_INPUT_MANIFEST_PATH="${MELEE_PORT_INPUT_MANIFEST}"
     MELEE_PORT_INPUT_MANIFEST_SHA256="${MELEE_PORT_INPUT_MANIFEST_SHA256}")
   target_link_libraries(runtime_mac PUBLIC native_animation port_build_options Threads::Threads port_enet
-    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation" "-framework Metal" "-framework QuartzCore" "-framework CoreText" "-framework CoreGraphics" "-framework ImageIO" "-framework GameController" "-framework UserNotifications" ${PORT_APPLE_UTI_FRAMEWORK}
+    Iconv::Iconv ${PORT_APPLE_UI_FRAMEWORK} "-framework Foundation" "-framework Metal" "-framework QuartzCore" "-framework CoreText" "-framework CoreGraphics" "-framework ImageIO" "-framework Network" "-framework GameController" "-framework UserNotifications" ${PORT_APPLE_UTI_FRAMEWORK}
     ${AURORA_SDL3_TARGET})
   if(LIBUSB_FOUND AND NOT MELEE_DEVICE_TARGET)
     target_link_libraries(runtime_mac PUBLIC PkgConfig::LIBUSB)

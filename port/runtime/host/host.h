@@ -90,7 +90,7 @@ void close_state_trace();
 bool state_trace_output_ok();
 
 // ---- simulation-thread cost accounting (per retrace; logged when a frame exceeds 20 ms) ----
-enum SimCost { SIM_DVD, SIM_AX, SIM_JUKEBOX, SIM_EXI, SIM_SNAPSHOT, SIM_QUEUE, SIM_OBSERVE, SIM_RENDER, SIM_TEXTURE, SIM_PUMP, SIM_GPUWAIT, SIM_DRAWABLE, SIM_COST_COUNT };
+enum SimCost { SIM_DVD, SIM_AX, SIM_JUKEBOX, SIM_EXI, SIM_SNAPSHOT, SIM_QUEUE, SIM_OBSERVE, SIM_RENDER, SIM_TEXTURE, SIM_PUMP, SIM_GPUWAIT, SIM_DRAWABLE, SIM_SAVESTATE, SIM_COST_COUNT };
 void sim_cost_add(int slot, double seconds);
 double last_sim_frame_ms();            // work time of the most recent simulation frame (sleep excluded)
 uint64_t late_frame_count();           // simulation frames that took longer than one 60 Hz period
@@ -130,6 +130,11 @@ const char* thermal_state_name();
 const char* latency_warning();
 // iPhone, iPad, Vision Pro: logs the audio buffer and route the system actually granted (call after opening the device).
 void audio_session_report();
+// What in the player's setup costs latency right now, in plain words: display refresh, full screen (Mac), Low Power Mode,
+// network type, controller and its report rate, audio route, online delay and heat. Shown on the dashboards and logged
+// when a match starts. Apple platforms; empty elsewhere.
+struct ReadinessItem { bool ok; std::string text; };
+std::vector<ReadinessItem> competitive_readiness(int display_hz, bool fullscreen, int online_delay);
 double now_seconds();
 struct SimCostScope { int slot; double t0; explicit SimCostScope(int s) : slot(s), t0(now_seconds()) {} ~SimCostScope() { sim_cost_add(slot, now_seconds() - t0); } };
 

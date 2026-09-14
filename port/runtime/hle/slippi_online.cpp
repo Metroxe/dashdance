@@ -403,6 +403,7 @@ void handle_online_inputs(const uint8_t* payload, std::vector<uint8_t>& q) {
 }
 
 void handle_capture_savestate(const uint8_t* payload) {
+  host::SimCostScope cost(host::SIM_SAVESTATE);   // rollback bookkeeping shows up in the frame-timing log
   if (is_disconnected()) return;
   int32_t frame = (int32_t)be32(payload);
   std::unique_ptr<Savestate> ss;
@@ -414,6 +415,7 @@ void handle_capture_savestate(const uint8_t* payload) {
 }
 
 void handle_load_savestate(const uint8_t* payload) {
+  host::SimCostScope cost(host::SIM_SAVESTATE);
   int32_t frame = (int32_t)be32(payload);
   if (!g_active_savestates.count(frame)) { host::log("slippi: savestate for frame %d does not exist", frame); return; }
   std::vector<PreserveBlock> blocks;
