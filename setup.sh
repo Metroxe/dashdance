@@ -12,7 +12,6 @@
 # Environment overrides: DASHDANCE_ISO (disc path), DASHDANCE_DECOMP (existing doldecomp/melee checkout),
 # DASHDANCE_JOBS (parallel jobs). Re-running is safe: every step skips work that is already done.
 set -euo pipefail
-for _v in ISO DECOMP JOBS TEAM UDID NO_OPEN DIR; do eval ": \${DASHDANCE_$_v:=\${ISLIPPI_$_v:-}}"; done   # the earlier ISLIPPI_* names still work
 ROOT="${0:A:h}"
 step() { printf '\n\033[1;33m==> %s\033[0m\n' "$1"; }
 fail() { printf '\033[1;31merror:\033[0m %s\n' "$1" >&2; exit 1; }
@@ -120,7 +119,7 @@ case "$TARGET" in
       echo "or drop it in from Finder (device › Files › Dashdance). Prefer USB with your own Apple ID? Re-run with --team auto."
     else
       BUILD="$ROOT/build/ios-xcode"
-      BID="app.islippi.ios.$(echo "$TEAM" | tr '[:upper:]' '[:lower:]')"   # unique per team, so automatic signing can register it
+      BID="app.dashdance.ios.$(echo "$TEAM" | tr '[:upper:]' '[:lower:]')"   # unique per team, so automatic signing can register it
       step "Generating the port"
       python3 "$ROOT/tools/bootstrap_port.py" --decomp-root "$DECOMP" --dol "$DOL" --build-dir "$BUILD" --gct-base 0x8065CC80 --macos-arch arm64 --stage generate
       step "Building and signing with Xcode (team $TEAM, bundle id $BID)"
@@ -181,7 +180,7 @@ print((ok or d or [{}])[0].get('identifier',''))" 2>/dev/null)"
     step "Installing on a booted Simulator (boot one in Xcode › Open Developer Tool › Simulator first)"
     if xcrun simctl list devices booted | grep -q Booted; then
       xcrun simctl install booted "$APP"
-      BID=app.islippi.ios
+      BID=app.dashdance.ios
       C="$(xcrun simctl get_app_container booted $BID data)"; mkdir -p "$C/Documents"; cp "$ISO" "$C/Documents/melee.iso"
       xcrun simctl launch booted $BID >/dev/null && echo "Launched. Touch controls are on by default; pair a controller in the Simulator's I/O menu."
     else

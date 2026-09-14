@@ -9,7 +9,6 @@
 # private repository (or keep the assets local). The script therefore refuses --publish unless the
 # repository is private, and always creates a draft.
 set -euo pipefail
-for _v in ISO DECOMP JOBS TEAM UDID NO_OPEN DIR; do eval ": \${DASHDANCE_$_v:=\${ISLIPPI_$_v:-}}"; done   # the earlier ISLIPPI_* names still work
 ROOT="${0:A:h:h}"
 ISO="${DASHDANCE_ISO:-}"; PUBLISH=0
 for arg in "$@"; do case "$arg" in --publish) PUBLISH=1;; --*) echo "unknown option $arg" >&2; exit 2;; *) ISO="$arg";; esac; done

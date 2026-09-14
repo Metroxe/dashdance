@@ -6,7 +6,6 @@
 # It checks the Mac, gets Apple's developer tools if needed, downloads (or updates) Dashdance into ~/Dashdance, asks for your
 # Melee disc image, builds the app from it on this Mac, puts Dashdance in Applications and opens it. Run it again to update.
 set -euo pipefail
-for _v in ISO DECOMP JOBS TEAM UDID NO_OPEN DIR; do eval ": \${DASHDANCE_$_v:=\${ISLIPPI_$_v:-}}"; done   # the earlier ISLIPPI_* names still work
 yellow() { printf '\n\033[1;33m%s\033[0m\n' "$1"; }
 fail() { printf '\n\033[1;31m%s\033[0m\n' "$1" >&2; exit 1; }
 DIR="${DASHDANCE_DIR:-$HOME/Dashdance}"

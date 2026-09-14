@@ -363,7 +363,7 @@ if(MELEE_BUILD_PORT_HEADLESS)
 endif()
 
 if(MELEE_BUILD_PORT_METAL)
-  set(MELEE_IOS_BUNDLE_ID "app.islippi.ios" CACHE STRING "Bundle identifier for the iOS/visionOS app")
+  set(MELEE_IOS_BUNDLE_ID "app.dashdance.ios" CACHE STRING "Bundle identifier for the iOS/visionOS app")
   set(MELEE_APPLE_TEAM "" CACHE STRING "Apple developer team id for automatic signing of device builds (Xcode generator)")
   if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "visionOS" OR CMAKE_SYSTEM_NAME STREQUAL "tvOS")
     set(MELEE_DEVICE_TARGET ON)
