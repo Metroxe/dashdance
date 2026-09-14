@@ -11,6 +11,8 @@
 #include "gc_diagram.h"
 #include "host.h"
 #include "input_config.h"
+#include "controller_pairing.h"
+#import <GameController/GameController.h>
 #include "mac_launcher.h"
 #include "slippi_login.h"
 #include <cmath>
@@ -213,6 +215,7 @@ int display_max_hz() {
 @property(nonatomic) int capturing;
 @property(nonatomic) BOOL armed;
 @property(nonatomic) BOOL sequence;
+@property(nonatomic) UIStackView* columns;   // the picture and the settings: side by side when wide
 @end
 
 @implementation MURemapController
@@ -258,23 +261,28 @@ int display_max_hz() {
   UIStackView* stack = [[UIStackView alloc] init];
   stack.axis = UILayoutConstraintAxisVertical; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = NO;
   [scroll addSubview:stack];
+  UIStackView* left = [[UIStackView alloc] init]; left.axis = UILayoutConstraintAxisVertical; left.spacing = 12;
+  UIStackView* right = [[UIStackView alloc] init]; right.axis = UILayoutConstraintAxisVertical; right.spacing = 12;
+  [stack addArrangedSubview:left]; [stack addArrangedSubview:right];
+  self.columns = stack;
   [NSLayoutConstraint activateConstraints:@[
     [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor], [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-    [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor], [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+    [scroll.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor], [scroll.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
     [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:24], [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-24],
     [stack.leadingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.leadingAnchor constant:24], [stack.trailingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.trailingAnchor constant:-24]]];
   UILabel* title = [[UILabel alloc] init];
-  title.text = self.controllerName.uppercaseString; title.font = meleeFont(26, UIFontWeightBold); title.textColor = kYellow(); title.numberOfLines = 0;
+  title.text = @"CONTROLLER"; title.font = meleeFont(26, UIFontWeightBold); title.textColor = kYellow(); title.numberOfLines = 0;
   self.hint = [self text:@"" size:13 weight:UIFontWeightRegular alpha:0.65];
   self.diagram = [[MUDiagramUIView alloc] init];
   [self.diagram.heightAnchor constraintEqualToAnchor:self.diagram.widthAnchor multiplier:1.0 / host::kDiagramAspect].active = YES;
   __weak MURemapController* weakSelf = self;
   self.diagram.onPick = ^(int part) { [weakSelf startCaptureAt:part sequence:NO]; };
-  for (UIView* v in @[title, self.hint, self.diagram]) [stack addArrangedSubview:v];
+  UILabel* device = [self text:self.controllerName ?: @"" size:13 weight:UIFontWeightSemibold alpha:0.55];   // which pad this is, when several are connected
+  for (UIView* v in @[title, device, self.hint, self.diagram]) [left addArrangedSubview:v];
   UIStackView* top = [[UIStackView alloc] init]; top.axis = UILayoutConstraintAxisHorizontal; top.spacing = 10; top.distribution = UIStackViewDistributionFillEqually;
   [top addArrangedSubview:[self action:@"Map all buttons" symbol:@"list.number" prominent:NO selector:@selector(mapAll)]];
   [top addArrangedSubview:[self action:@"Test rumble" symbol:@"waveform" prominent:NO selector:@selector(testRumble)]];
-  [stack addArrangedSubview:top];
+  [left addArrangedSubview:top];
   self.rows = [NSMutableArray array];
   for (int i = 0; i < host::GC_CTL_COUNT; ++i) {
     UIButtonConfiguration* c = [MULauncherController glassConfiguration:NO];
@@ -283,28 +291,37 @@ int display_max_hz() {
     UIButton* b = [UIButton buttonWithConfiguration:c primaryAction:nil];
     b.tag = i; b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
     [b addTarget:self action:@selector(rowTapped:) forControlEvents:UIControlEventTouchUpInside];
-    [self.rows addObject:b]; [stack addArrangedSubview:b];
+    [self.rows addObject:b]; [right addArrangedSubview:b];
   }
   const host::ControllerMap m = _config.map;
   self.stickSlider = [self slider:0 max:60 value:m.stick_deadzone]; self.stickValue = [[UILabel alloc] init];
   self.cstickSlider = [self slider:0 max:60 value:m.cstick_deadzone]; self.cstickValue = [[UILabel alloc] init];
   self.triggerSlider = [self slider:20 max:100 value:m.trigger_press]; self.triggerValue = [[UILabel alloc] init];
-  [stack addArrangedSubview:[self row:@"Stick deadzone" control:self.stickSlider value:self.stickValue]];
-  [stack addArrangedSubview:[self row:@"C-stick deadzone" control:self.cstickSlider value:self.cstickValue]];
-  [stack addArrangedSubview:[self row:@"Trigger press point" control:self.triggerSlider value:self.triggerValue]];
+  [right addArrangedSubview:[self row:@"Stick deadzone" control:self.stickSlider value:self.stickValue]];
+  [right addArrangedSubview:[self row:@"C-stick deadzone" control:self.cstickSlider value:self.cstickValue]];
+  [right addArrangedSubview:[self row:@"Trigger press point" control:self.triggerSlider value:self.triggerValue]];
   self.swapSwitch = [[UISwitch alloc] init]; self.swapSwitch.on = m.swap_sticks; self.swapSwitch.onTintColor = kYellow();
   [self.swapSwitch addTarget:self action:@selector(togglesChanged) forControlEvents:UIControlEventValueChanged];
   self.rumbleSwitch = [[UISwitch alloc] init]; self.rumbleSwitch.on = m.rumble; self.rumbleSwitch.onTintColor = kYellow();
   [self.rumbleSwitch addTarget:self action:@selector(togglesChanged) forControlEvents:UIControlEventValueChanged];
-  [stack addArrangedSubview:[self row:@"Swap sticks" control:self.swapSwitch value:nil]];
-  [stack addArrangedSubview:[self row:@"Rumble" control:self.rumbleSwitch value:nil]];
+  [right addArrangedSubview:[self row:@"Swap sticks" control:self.swapSwitch value:nil]];
+  [right addArrangedSubview:[self row:@"Rumble" control:self.rumbleSwitch value:nil]];
   UIStackView* bottom = [[UIStackView alloc] init]; bottom.axis = UILayoutConstraintAxisHorizontal; bottom.spacing = 10; bottom.distribution = UIStackViewDistributionFillEqually;
   [bottom addArrangedSubview:[self action:@"Reset to defaults" symbol:@"arrow.counterclockwise" prominent:NO selector:@selector(resetDefaults)]];
   [bottom addArrangedSubview:[self action:@"Done" symbol:@"checkmark" prominent:YES selector:@selector(finish)]];
-  [stack addArrangedSubview:bottom];
+  [right addArrangedSubview:bottom];
   [self refresh];
   self.link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick)];
   [self.link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+- (void)viewWillLayoutSubviews {
+  [super viewWillLayoutSubviews];
+  const CGSize size = self.view.bounds.size;
+  const BOOL wide = size.width > size.height && size.width >= 640;   // landscape phones, wide sheets, Vision Pro windows
+  self.columns.axis = wide ? UILayoutConstraintAxisHorizontal : UILayoutConstraintAxisVertical;
+  self.columns.distribution = wide ? UIStackViewDistributionFillEqually : UIStackViewDistributionFill;
+  self.columns.alignment = wide ? UIStackViewAlignmentTop : UIStackViewAlignmentFill;
+  self.columns.spacing = wide ? 28 : 12;
 }
 - (void)viewDidDisappear:(BOOL)animated { [super viewDidDisappear:animated]; [self.link invalidate]; self.link = nil; }
 - (void)refresh {
@@ -380,6 +397,143 @@ int display_max_hz() {
 - (void)finish { [self dismissViewControllerAnimated:YES completion:nil]; }
 @end
 
+// "Connect a controller": pairing-mode steps per controller family, a shortcut to Settings, and a live confirmation the
+// moment a new controller shows up. Apple does not let apps pair Bluetooth controllers themselves.
+@interface MUPairingController : UIViewController
+@property(nonatomic) UILabel* steps; @property(nonatomic) UIImageView* guideIcon;
+@property(nonatomic) UILabel* status; @property(nonatomic) UIActivityIndicatorView* spinner; @property(nonatomic) UIImageView* check;
+@property(nonatomic) NSTimer* timer;
+@property(nonatomic) std::string baseline;
+@property(nonatomic, copy) void (^completion)(void);
+@end
+
+@implementation MUPairingController
+- (UILabel*)text:(NSString*)t size:(CGFloat)size weight:(UIFontWeight)weight alpha:(CGFloat)alpha {
+  UILabel* l = [[UILabel alloc] init];
+  l.text = t; l.font = [UIFont systemFontOfSize:size weight:weight]; l.textColor = [UIColor colorWithWhite:1 alpha:alpha]; l.numberOfLines = 0;
+  return l;
+}
+- (UIView*)step:(int)number text:(NSString*)text {
+  UIStackView* row = [[UIStackView alloc] init]; row.axis = UILayoutConstraintAxisHorizontal; row.spacing = 10; row.alignment = UIStackViewAlignmentFirstBaseline;
+  UILabel* n = [self text:[NSString stringWithFormat:@"%d", number] size:17 weight:UIFontWeightHeavy alpha:1]; n.textColor = kYellow();
+  [n setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+  [row addArrangedSubview:n]; [row addArrangedSubview:[self text:text size:17 weight:UIFontWeightSemibold alpha:1]];
+  return row;
+}
+- (UIButton*)action:(NSString*)title symbol:(NSString*)symbol prominent:(BOOL)prominent selector:(SEL)selector {
+  UIButtonConfiguration* c = [MULauncherController glassConfiguration:prominent];
+  c.title = title; c.image = [UIImage systemImageNamed:symbol]; c.imagePadding = 6; c.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+  c.contentInsets = NSDirectionalEdgeInsetsMake(12, 18, 12, 18);
+  if (prominent) { c.baseBackgroundColor = kYellow(); c.baseForegroundColor = UIColor.blackColor; } else c.baseForegroundColor = UIColor.whiteColor;
+  UIButton* b = [UIButton buttonWithConfiguration:c primaryAction:nil];
+  [b addTarget:self action:selector forControlEvents:UIControlEventTouchUpInside];
+  return b;
+}
+- (void)viewDidLoad {
+  [super viewDidLoad];
+  self.view.backgroundColor = rgb(0.05, 0.06, 0.16);
+  UIScrollView* scroll = [[UIScrollView alloc] init]; scroll.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.view addSubview:scroll];
+  UIStackView* stack = [[UIStackView alloc] init]; stack.axis = UILayoutConstraintAxisVertical; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = NO;
+  [scroll addSubview:stack];
+  [NSLayoutConstraint activateConstraints:@[
+    [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor], [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+    [scroll.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor], [scroll.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
+    [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:24], [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-32],
+    [stack.centerXAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.centerXAnchor],
+    [stack.widthAnchor constraintLessThanOrEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-48]]];
+  // 640 pt wide where there is room, the full width minus margins otherwise; strong enough that wrapping text cannot squeeze it.
+  NSLayoutConstraint* readable = [stack.widthAnchor constraintEqualToConstant:640]; readable.priority = 998; readable.active = YES;
+  UILabel* title = [[UILabel alloc] init];
+  title.text = @"CONNECT A CONTROLLER"; title.font = meleeFont(26, UIFontWeightBold); title.textColor = kYellow(); title.numberOfLines = 0;
+  [stack addArrangedSubview:title];
+  [stack addArrangedSubview:[self text:@"A wireless controller pairs once. After that it connects by itself whenever you turn it on, and shows up here within a second." size:14 weight:UIFontWeightRegular alpha:0.7]];
+  [stack setCustomSpacing:24 afterView:stack.arrangedSubviews.lastObject];
+
+  [stack addArrangedSubview:[self step:1 text:@"Put the controller in pairing mode"]];
+  NSMutableArray* names = [NSMutableArray array];
+  for (int i = 0; i < host::kPairingGuideCount; ++i) [names addObject:[NSString stringWithUTF8String:host::kPairingGuides[i].name]];
+  UISegmentedControl* picker = [[UISegmentedControl alloc] initWithItems:names];
+  picker.selectedSegmentIndex = 0; picker.selectedSegmentTintColor = kYellow();
+  [picker setTitleTextAttributes:@{NSForegroundColorAttributeName: UIColor.blackColor} forState:UIControlStateSelected];
+  [picker setTitleTextAttributes:@{NSForegroundColorAttributeName: UIColor.whiteColor} forState:UIControlStateNormal];
+  [picker addTarget:self action:@selector(guideChanged:) forControlEvents:UIControlEventValueChanged];
+  [stack addArrangedSubview:picker];
+  UIStackView* guide = [[UIStackView alloc] init]; guide.axis = UILayoutConstraintAxisHorizontal; guide.spacing = 12; guide.alignment = UIStackViewAlignmentTop;
+  self.guideIcon = [[UIImageView alloc] init]; self.guideIcon.tintColor = kYellow(); self.guideIcon.contentMode = UIViewContentModeScaleAspectFit;
+  self.guideIcon.preferredSymbolConfiguration = [UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightRegular];
+  [self.guideIcon.widthAnchor constraintEqualToConstant:32].active = YES;
+  self.steps = [self text:@"" size:15 weight:UIFontWeightRegular alpha:0.85];
+  [guide addArrangedSubview:self.guideIcon]; [guide addArrangedSubview:self.steps];
+  [stack addArrangedSubview:guide];
+  [stack setCustomSpacing:24 afterView:guide];
+
+  [stack addArrangedSubview:[self step:2 text:@"Pick it in Bluetooth settings"]];
+  [stack addArrangedSubview:[self text:@"Open Settings, tap Bluetooth, and tap the controller under Other Devices." size:15 weight:UIFontWeightRegular alpha:0.85]];
+  UIStackView* open = [[UIStackView alloc] init]; open.axis = UILayoutConstraintAxisHorizontal; open.alignment = UIStackViewAlignmentLeading;
+  [open addArrangedSubview:[self action:@"Open Settings" symbol:@"arrow.up.forward.app" prominent:NO selector:@selector(openSettings)]];
+  [open addArrangedSubview:[[UIView alloc] init]];
+  [stack addArrangedSubview:open];
+  [stack setCustomSpacing:24 afterView:open];
+
+  [stack addArrangedSubview:[self step:3 text:@"Come back and play"]];
+  UIStackView* statusRow = [[UIStackView alloc] init]; statusRow.axis = UILayoutConstraintAxisHorizontal; statusRow.spacing = 10; statusRow.alignment = UIStackViewAlignmentCenter;
+  self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium]; self.spinner.color = UIColor.whiteColor; [self.spinner startAnimating];
+  self.check = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checkmark.circle.fill"]]; self.check.tintColor = rgb(0.30, 0.85, 0.45); self.check.hidden = YES;
+  self.status = [self text:@"Waiting for a controller…" size:16 weight:UIFontWeightMedium alpha:0.9];
+  for (UIView* v in @[self.spinner, self.check, self.status]) [statusRow addArrangedSubview:v];
+  [stack addArrangedSubview:statusRow];
+  [stack setCustomSpacing:28 afterView:statusRow];
+  [stack addArrangedSubview:[self text:@"Using a cable? A USB-C controller works the moment you plug it in (iPhone 15 and later, and iPads with USB-C). The on-screen controls hide themselves while a controller is connected. GameCube controllers on an adapter need a Mac." size:13 weight:UIFontWeightRegular alpha:0.6]];
+  UIButton* done = [self action:@"Done" symbol:@"checkmark" prominent:YES selector:@selector(finish)];
+  [stack addArrangedSubview:done];
+  [self guideChanged:picker];
+}
+- (void)guideChanged:(UISegmentedControl*)sender {
+  const host::PairingGuide& g = host::kPairingGuides[MAX(0, MIN(host::kPairingGuideCount - 1, (int)sender.selectedSegmentIndex))];
+  self.steps.text = [NSString stringWithUTF8String:g.steps];
+  self.guideIcon.image = [UIImage systemImageNamed:[NSString stringWithUTF8String:g.symbol]] ?: [UIImage systemImageNamed:@"gamecontroller"];
+}
+- (void)openSettings {
+  // iOS has no public link to the Bluetooth page; this one opens it where the system allows and Settings otherwise.
+  [UIApplication.sharedApplication openURL:[NSURL URLWithString:@"App-Prefs:Bluetooth"] options:@{} completionHandler:^(BOOL ok) {
+    if (!ok) [UIApplication.sharedApplication openURL:[NSURL URLWithString:UIApplicationOpenSettingsURLString] options:@{} completionHandler:nil];
+  }];
+}
+- (void)viewDidAppear:(BOOL)animated {
+  [super viewDidAppear:animated];
+  std::string s;
+  for (const host::ControllerInfo& p : host::window_list_controllers()) s += p.guid + ";";
+  self.baseline = s;
+#if !TARGET_OS_VISION
+  [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];   // MFi pads that support discovery pair without Settings
+#endif
+  self.timer = [NSTimer timerWithTimeInterval:0.5 target:self selector:@selector(tick) userInfo:nil repeats:YES];
+  [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];
+}
+- (void)viewWillDisappear:(BOOL)animated {
+  [super viewWillDisappear:animated];
+#if !TARGET_OS_VISION
+  [GCController stopWirelessControllerDiscovery];
+#endif
+  [self.timer invalidate]; self.timer = nil;
+  if (self.completion) self.completion();
+}
+- (void)tick {
+  for (const host::ControllerInfo& p : host::window_list_controllers()) {
+    if (self.baseline.find(p.guid + ";") != std::string::npos) continue;
+    self.baseline += p.guid + ";";
+    [self.spinner stopAnimating]; self.spinner.hidden = YES; self.check.hidden = NO;
+    self.status.text = [NSString stringWithFormat:@"%@ is connected and ready to play.", [NSString stringWithUTF8String:p.name.c_str()]];
+    self.status.textColor = UIColor.whiteColor;
+#if !TARGET_OS_VISION
+    [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
+#endif
+  }
+}
+- (void)finish { [self dismissViewControllerAnimated:YES completion:nil]; }
+@end
+
 // One line describing a controller's connection and measured report rate, for the dashboards.
 static std::string controller_rate_line(const host::ControllerInfo& pad) {
   char b[160];
@@ -402,6 +556,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
 @property(nonatomic) host::Dashboard dashboard;
 @property(nonatomic) BOOL done, playPressed, busy;
 @property(nonatomic) UIScrollView* scroll;
+@property(nonatomic) UIStackView* cardColumns; @property(nonatomic) NSLayoutConstraint* maxWidth;   // two columns of cards when wide
 @property(nonatomic) UIStackView* stack;
 @property(nonatomic) NSArray<UIView*>* entrance;
 @property(nonatomic, copy) NSString* startupError;
@@ -460,9 +615,11 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
     [self.scroll.topAnchor constraintEqualToAnchor:self.view.topAnchor], [self.scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
     [self.scroll.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor], [self.scroll.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
     [self.stack.topAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.topAnchor constant:44], [self.stack.bottomAnchor constraintEqualToAnchor:self.scroll.contentLayoutGuide.bottomAnchor constant:-48],
-    [self.stack.centerXAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.centerXAnchor], [self.stack.widthAnchor constraintLessThanOrEqualToConstant:640]]];
+    [self.stack.centerXAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.centerXAnchor]]];
+  self.maxWidth = [self.stack.widthAnchor constraintLessThanOrEqualToConstant:640]; self.maxWidth.active = YES;
   NSLayoutConstraint* width = [self.stack.widthAnchor constraintEqualToAnchor:self.scroll.frameLayoutGuide.widthAnchor constant:-40];
   width.priority = UILayoutPriorityDefaultHigh; width.active = YES;
+  [self.stack.widthAnchor constraintLessThanOrEqualToAnchor:self.scroll.frameLayoutGuide.widthAnchor constant:-32].active = YES;   // never wider than a phone
   UITapGestureRecognizer* tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
   tap.cancelsTouchesInView = NO; [self.view addGestureRecognizer:tap];
 
@@ -481,7 +638,13 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   UILabel* footer = [[UILabel alloc] init];
   footer.text = @"Needs your own Super Smash Bros. Melee NTSC 1.02 disc image. Nothing from the game ships with the app. Unofficial; not affiliated with the Slippi team or Nintendo.";
   footer.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1]; footer.textColor = [UIColor colorWithWhite:1 alpha:0.45]; footer.numberOfLines = 0; footer.textAlignment = NSTextAlignmentCenter;
-  for (UIView* v in @[hero, self.stepsCard, self.rankedCard, self.gamesCard, self.accountCard, disc, controllers, display, touch, regionCard, self.playButton, footer]) [self.stack addArrangedSubview:v];
+  UIStackView* leftCards = [[UIStackView alloc] init]; leftCards.axis = UILayoutConstraintAxisVertical; leftCards.spacing = 16;
+  UIStackView* rightCards = [[UIStackView alloc] init]; rightCards.axis = UILayoutConstraintAxisVertical; rightCards.spacing = 16;
+  for (UIView* v in @[self.stepsCard, self.rankedCard, self.gamesCard, self.accountCard]) [leftCards addArrangedSubview:v];   // you
+  for (UIView* v in @[disc, controllers, display, touch, regionCard]) [rightCards addArrangedSubview:v];                      // the setup
+  self.cardColumns = [[UIStackView alloc] initWithArrangedSubviews:@[leftCards, rightCards]];
+  self.cardColumns.axis = UILayoutConstraintAxisVertical; self.cardColumns.spacing = 16;
+  for (UIView* v in @[hero, self.cardColumns, self.playButton, footer]) [self.stack addArrangedSubview:v];
   [self.stack setCustomSpacing:28 afterView:hero];
   self.entrance = @[hero, self.stepsCard, self.rankedCard, self.gamesCard, self.accountCard, disc, controllers, display, touch, regionCard, self.playButton];
   for (UIView* v in self.entrance) { v.alpha = 0; v.transform = CGAffineTransformMakeTranslation(0, 24); }
@@ -501,6 +664,38 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   }
   if (const char* scroll = std::getenv("MELEE_LAUNCHER_SCROLL"))   // screenshot aid: start scrolled down by N points
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [self.scroll setContentOffset:CGPointMake(0, std::atof(scroll)) animated:NO]; });
+  if (const char* orientation = std::getenv("MELEE_ORIENTATION"))   // screenshot aid: "portrait" or "landscape"
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+#if !TARGET_OS_VISION
+      if (@available(iOS 16.0, *)) {
+        const UIInterfaceOrientationMask mask = std::strcmp(orientation, "landscape") == 0 ? UIInterfaceOrientationMaskLandscapeRight : UIInterfaceOrientationMaskPortrait;
+        [self.view.window.windowScene requestGeometryUpdateWithPreferences:[[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask] errorHandler:nil];
+      }
+#endif
+    });
+#if TARGET_OS_VISION
+  if (const char* size = std::getenv("MELEE_WINDOW_SIZE"))   // screenshot aid: "<width>x<height>" in points
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+      double w = 0, h = 0;
+      if (std::sscanf(size, "%lfx%lf", &w, &h) == 2)
+        [self.view.window.windowScene requestGeometryUpdateWithPreferences:[[UIWindowSceneGeometryPreferencesVision alloc] initWithSize:CGSizeMake(w, h)] errorHandler:nil];
+    });
+#endif
+  if (std::getenv("MELEE_OPEN_PAIRING"))   // screenshot aid: the Connect a Controller screen
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [self connectController]; });
+  if (const char* which = std::getenv("MELEE_OPEN_EDITOR"))   // screenshot aid: "pad:<guid>:<name>" opens that controller's editor
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+      const std::string w = which;
+      if (w.rfind("pad:", 0) != 0) return;
+      const size_t colon = w.find(':', 4);
+      MURemapController* rm = [[MURemapController alloc] init];
+      host::ControllerConfig cfg;
+      cfg.guid = w.substr(4, colon == std::string::npos ? std::string::npos : colon - 4);
+      if (const host::ControllerConfig* c = host::controller_config_for(cfg.guid.c_str())) cfg = *c;
+      rm.config = cfg; rm.controllerName = [NSString stringWithUTF8String:(colon == std::string::npos ? "Controller" : w.substr(colon + 1)).c_str()];
+      rm.modalPresentationStyle = UIModalPresentationFormSheet;
+      [self presentViewController:rm animated:NO completion:nil];
+    });
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
     CABasicAnimation* breathe = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
     breathe.fromValue = @1.0; breathe.toValue = @1.02; breathe.duration = 1.6; breathe.autoreverses = YES; breathe.repeatCount = HUGE_VALF;
@@ -576,6 +771,18 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   objc_setAssociatedObject(bar, "shape", shape, OBJC_ASSOCIATION_RETAIN);
   return bar;
 }
+- (void)viewWillLayoutSubviews {
+  [super viewWillLayoutSubviews];
+  // Wide screens (iPad in landscape, 13-inch iPads, Vision Pro windows) put the cards in two columns; phones and narrow
+  // windows keep one readable column in the same order.
+  const BOOL wide = self.view.bounds.size.width >= 960;
+  if (self.cardColumns && (self.cardColumns.axis == UILayoutConstraintAxisHorizontal) != wide) {
+    self.cardColumns.axis = wide ? UILayoutConstraintAxisHorizontal : UILayoutConstraintAxisVertical;
+    self.cardColumns.distribution = wide ? UIStackViewDistributionFillEqually : UIStackViewDistributionFill;
+    self.cardColumns.alignment = wide ? UIStackViewAlignmentTop : UIStackViewAlignmentFill;
+    self.maxWidth.constant = wide ? 1180 : 640;
+  }
+}
 - (void)viewDidLayoutSubviews {
   [super viewDidLayoutSubviews];
   // angled header bars follow their width
@@ -616,6 +823,8 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   [icon.widthAnchor constraintEqualToConstant:24].active = YES; [icon setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
   UILabel* l = [self label:text size:16 weight:UIFontWeightRegular alpha:1];
   [l setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+  [l setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];   // on a phone the label wraps; the switch keeps its size
+  [control setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
   [row addArrangedSubview:icon]; [row addArrangedSubview:l]; [row addArrangedSubview:control];
   if ([control isKindOfClass:UISlider.class]) [control.widthAnchor constraintEqualToConstant:170].active = YES;
   return row;
@@ -784,7 +993,10 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   [s addArrangedSubview:[self header:@"CONTROLLERS" symbol:@"gamecontroller"]];
   self.controllersStack = [[UIStackView alloc] init]; self.controllersStack.axis = UILayoutConstraintAxisVertical; self.controllersStack.spacing = 10;
   [s addArrangedSubview:self.controllersStack];
-  UILabel* help = [self label:@"Bluetooth and USB-C controllers (PlayStation, Xbox, Switch Pro, MFi) connect through Settings › Bluetooth or a cable, then appear here with their measured report rate. Assign each one a GameCube port and remap buttons. The on-screen controller hides itself while a controller is connected. GameCube adapters need a Mac: iOS does not give apps raw USB access." size:13 weight:UIFontWeightRegular alpha:0.6];
+  UIButton* connect = [self button:@"Connect a Controller" symbol:@"dot.radiowaves.left.and.right" prominent:NO];
+  [connect addTarget:self action:@selector(connectController) forControlEvents:UIControlEventTouchUpInside];
+  [s addArrangedSubview:connect];
+  UILabel* help = [self label:@"Connect a Controller walks you through pairing a PlayStation, Xbox, Switch Pro or other Bluetooth controller; USB-C controllers work as soon as they are plugged in. Connected controllers appear here with their measured report rate, a GameCube port and Configure. The on-screen controller hides itself while a controller is connected. GameCube adapters need a Mac: iOS does not give apps raw USB access." size:13 weight:UIFontWeightRegular alpha:0.6];
   [s addArrangedSubview:help];
   return card;
 }
@@ -955,7 +1167,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
     UIButton* portButton = [UIButton buttonWithConfiguration:pc primaryAction:nil];
     portButton.menu = [UIMenu menuWithChildren:ports]; portButton.showsMenuAsPrimaryAction = YES;
     UIButtonConfiguration* rc = [MULauncherController glassConfiguration:NO];
-    rc.title = @"Remap"; rc.image = [UIImage systemImageNamed:@"slider.horizontal.3"]; rc.imagePadding = 6; rc.baseForegroundColor = UIColor.whiteColor; rc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    rc.title = @"Configure"; rc.image = [UIImage systemImageNamed:@"slider.horizontal.3"]; rc.imagePadding = 6; rc.baseForegroundColor = UIColor.whiteColor; rc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
     UIButton* remap = [UIButton buttonWithConfiguration:rc primaryAction:[UIAction actionWithHandler:^(UIAction*) {
       MURemapController* rm = [[MURemapController alloc] init];
       host::ControllerConfig cfg; if (const host::ControllerConfig* c = host::controller_config_for(guid.UTF8String)) cfg = *c; else { cfg.guid = guid.UTF8String; cfg.port = pad.assigned_port; }
@@ -967,6 +1179,14 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
     [self.controllersStack addArrangedSubview:row];
   }
   [self refreshSteps];
+}
+- (void)connectController {
+  if (self.presentedViewController) return;
+  MUPairingController* pairing = [[MUPairingController alloc] init];
+  __weak MULauncherController* weakSelf = self;
+  pairing.completion = ^{ [weakSelf refreshControllers]; };
+  pairing.modalPresentationStyle = UIModalPresentationFormSheet;
+  [self presentViewController:pairing animated:YES completion:nil];
 }
 - (void)controllerTick {
   // Rebuild the card when a controller comes or goes, or when a measured rate changes (rounded, so it settles).

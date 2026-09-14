@@ -814,7 +814,8 @@ class MetalBackend final : public Backend {
     float vw = ww, vh = ww / aspect;
     if (vh > wh) { vh = wh; vw = wh * aspect; }
     const bool portrait = wh > ww * 1.05f;   // touch devices held upright: game on top, controls below
-    [enc setViewport:MTLViewport{(ww - vw) * 0.5, portrait ? 0.0 : (wh - vh) * 0.5, vw, vh, 0, 1}];
+    const double top = portrait ? std::min((double)host::window_safe_top_pixels(), std::max(0.0, (double)(wh - vh))) : (wh - vh) * 0.5;   // upright: just below the Dynamic Island
+    [enc setViewport:MTLViewport{(ww - vw) * 0.5, top, vw, vh, 0, 1}];
     BlitConstants bc{{(float)c.src_w / EFB_WIDTH, (float)c.src_h / EFB_HEIGHT, (float)c.src_x / EFB_WIDTH, (float)c.src_y / EFB_HEIGHT},
                      {1.0f / std::max((float)efb_w_, 1.0f), 1.0f / std::max((float)efb_h_, 1.0f), std::clamp(opts_.sharpness, 0.0f, 1.0f), 0.0f},
                      {1, 1, 0, 0}};

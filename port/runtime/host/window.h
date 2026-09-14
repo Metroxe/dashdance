@@ -14,6 +14,10 @@ void* window_create(int w, int h, const wchar_t* title, bool visible = true);
 void window_set_resize_callback(ResizeCallback cb);
 void window_pump();
 void window_set_fullscreen(bool enabled);
+// Pixels at the top of the window covered by the Dynamic Island, notch or status bar (0 on the Mac).
+float window_safe_top_pixels();
+// All four safe-area insets in pixels (island, notch, rounded corners, home indicator); zeros on the Mac.
+void window_safe_insets(float& top, float& left, float& right, float& bottom);
 void window_gamepad_rumble(int port, bool on);   // SDL gamepad on that GameCube port, if any
 bool window_take_fullscreen_toggle();   // true once per Alt+Enter press in the game window
 double window_refresh_rate();

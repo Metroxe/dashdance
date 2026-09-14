@@ -12,6 +12,8 @@
 #include "gc_diagram.h"
 #include "host.h"
 #include "input_config.h"
+#include "controller_pairing.h"
+#import <GameController/GameController.h>
 #include "mac_launcher.h"
 #include "slippi_login.h"
 #include <cmath>
@@ -294,6 +296,7 @@ API_AVAILABLE(macos(26.0))
 @property(nonatomic) NSWindow* window;
 @property(nonatomic) NSStackView* stack;
 @property(nonatomic) NSScrollView* scroll;
+@property(nonatomic) NSStackView* cardColumns; @property(nonatomic) NSLayoutConstraint* maxWidth; @property(nonatomic) NSArray<NSLayoutConstraint*>* stackedWidths;   // two columns of cards when wide
 @property(nonatomic) id editor;   // the open controller editor sheet
 @property(nonatomic) NSArray<NSView*>* entrance;
 @property(nonatomic, copy) NSString* startupError;
@@ -335,6 +338,139 @@ API_AVAILABLE(macos(26.0))
   const NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
   const int part = host::gc_diagram_hit(self.bounds, p, _state.directions);
   if (part != host::DP_NONE && self.onPick) self.onPick(part);
+}
+@end
+
+// Sheets need room: grow the dashboard window, within its screen, before attaching one that would not fit.
+static void fit_window_for_sheet(NSWindow* parent, NSSize sheet) {
+  if (parent.styleMask & NSWindowStyleMaskFullScreen) return;
+  const NSRect screen = (parent.screen ?: NSScreen.mainScreen).visibleFrame;
+  NSRect f = parent.frame;
+  const CGFloat w = MAX(f.size.width, MIN(sheet.width + 48, screen.size.width)), h = MAX(f.size.height, MIN(sheet.height + 96, screen.size.height));
+  if (w == f.size.width && h == f.size.height) return;
+  NSRect g = NSMakeRect(f.origin.x - (w - f.size.width) / 2, f.origin.y - (h - f.size.height), w, h);
+  g.origin.x = MAX(screen.origin.x, MIN(g.origin.x, NSMaxX(screen) - w)); g.origin.y = MAX(screen.origin.y, MIN(g.origin.y, NSMaxY(screen) - h));
+  [parent setFrame:g display:YES animate:NO];   // animation does not run inside the dashboard's modal session
+}
+// "Connect a controller": pairing-mode steps per controller family, a shortcut to Bluetooth settings, and a live
+// confirmation the moment a new controller shows up. Apple does not let apps pair Bluetooth controllers themselves.
+@interface MUPairingSheet : NSObject
+@property(nonatomic) NSWindow* sheet;
+@property(nonatomic, copy) void (^completion)(void);
+@property(nonatomic) NSTextField* steps; @property(nonatomic) NSImageView* guideIcon;
+@property(nonatomic) NSTextField* status; @property(nonatomic) NSProgressIndicator* spinner; @property(nonatomic) NSImageView* check;
+@property(nonatomic) NSTimer* timer;
+@property(nonatomic) std::string baseline;
+- (void)presentOn:(NSWindow*)parent;
+@end
+
+@implementation MUPairingSheet
+static NSString* pairing_guids() {
+  std::string s;
+  for (const host::ControllerInfo& p : host::window_list_controllers()) s += p.guid + ";";
+  return [NSString stringWithUTF8String:s.c_str()];
+}
+static NSView* pairing_step(int number, NSString* text) {
+  NSStackView* row = [[NSStackView alloc] init]; row.orientation = NSUserInterfaceLayoutOrientationHorizontal; row.spacing = 10; row.alignment = NSLayoutAttributeFirstBaseline;
+  NSTextField* n = label([NSString stringWithFormat:@"%d", number], 15, NSFontWeightHeavy, 1); n.textColor = kYellow();
+  NSTextField* t = label(text, 15, NSFontWeightSemibold, 1);
+  [row addArrangedSubview:n]; [row addArrangedSubview:t];
+  return row;
+}
+static NSTextField* pairing_body(NSString* text) {
+  NSTextField* f = [NSTextField wrappingLabelWithString:text];
+  f.font = [NSFont systemFontOfSize:13]; f.textColor = [NSColor colorWithWhite:1 alpha:0.72]; f.preferredMaxLayoutWidth = 560;
+  return f;
+}
+static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL action, BOOL prominent) {
+  NSButton* b = [NSButton buttonWithTitle:title target:target action:action];
+  b.image = symbol(sym, 12, NSFontWeightSemibold); b.imagePosition = NSImageLeading; b.controlSize = NSControlSizeLarge; b.bezelStyle = NSBezelStyleRounded;
+  if (prominent) { b.bezelColor = kYellow(); b.contentTintColor = kInk(); }
+  if (@available(macOS 26.0, *)) b.bezelStyle = NSBezelStyleGlass;
+  return b;
+}
+- (instancetype)init {
+  self = [super init];
+  self.sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 620, 560) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+  self.sheet.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+  self.sheet.backgroundColor = rgb(0.05, 0.06, 0.15);
+  NSStackView* col = [[MUColumn alloc] init]; col.spacing = 12; col.translatesAutoresizingMaskIntoConstraints = NO;
+  NSTextField* title = [NSTextField labelWithString:@"CONNECT A CONTROLLER"]; title.font = meleeFont(22); title.textColor = kYellow();
+  [col addArrangedSubview:title];
+  [col addArrangedSubview:pairing_body(@"A wireless controller pairs once. After that it connects by itself whenever you turn it on, and shows up in iSlippi within a second.")];
+  [col setCustomSpacing:20 afterView:col.arrangedSubviews.lastObject];
+
+  [col addArrangedSubview:pairing_step(1, @"Put the controller in pairing mode")];
+  NSSegmentedControl* picker = [[NSSegmentedControl alloc] init];
+  picker.segmentCount = host::kPairingGuideCount; picker.trackingMode = NSSegmentSwitchTrackingSelectOne; picker.controlSize = NSControlSizeLarge;
+  for (int i = 0; i < host::kPairingGuideCount; ++i) [picker setLabel:[NSString stringWithUTF8String:host::kPairingGuides[i].name] forSegment:i];
+  picker.selectedSegment = 0; picker.target = self; picker.action = @selector(guideChanged:);
+  [col addArrangedSubview:picker];
+  NSStackView* guide = [[NSStackView alloc] init]; guide.orientation = NSUserInterfaceLayoutOrientationHorizontal; guide.spacing = 12; guide.alignment = NSLayoutAttributeTop;
+  self.guideIcon = [[NSImageView alloc] init]; self.guideIcon.contentTintColor = kYellow();
+  [self.guideIcon.widthAnchor constraintEqualToConstant:30].active = YES;
+  self.steps = pairing_body(@""); self.steps.preferredMaxLayoutWidth = 520;
+  [guide addArrangedSubview:self.guideIcon]; [guide addArrangedSubview:self.steps];
+  [col addArrangedSubview:guide];
+  [col setCustomSpacing:20 afterView:guide];
+
+  [col addArrangedSubview:pairing_step(2, @"Pick it in Bluetooth settings")];
+  [col addArrangedSubview:pairing_body(@"It appears under Nearby Devices within a few seconds. Click Connect.")];
+  [col addArrangedSubview:pairing_button(@"Open Bluetooth Settings", @"arrow.up.forward.app", self, @selector(openBluetooth), NO)];
+  [col setCustomSpacing:20 afterView:col.arrangedSubviews.lastObject];
+
+  [col addArrangedSubview:pairing_step(3, @"Play")];
+  NSStackView* statusRow = [[NSStackView alloc] init]; statusRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; statusRow.spacing = 10;
+  self.spinner = [[NSProgressIndicator alloc] init]; self.spinner.style = NSProgressIndicatorStyleSpinning; self.spinner.controlSize = NSControlSizeSmall; [self.spinner startAnimation:nil];
+  self.check = [NSImageView imageViewWithImage:symbol(@"checkmark.circle.fill", 18, NSFontWeightBold)]; self.check.contentTintColor = rgb(0.30, 0.85, 0.45); self.check.hidden = YES;
+  self.status = label(@"Waiting for a controller…", 14, NSFontWeightMedium, 0.85);
+  for (NSView* v in @[self.spinner, self.check, self.status]) [statusRow addArrangedSubview:v];
+  [col addArrangedSubview:statusRow];
+  [col setCustomSpacing:24 afterView:statusRow];
+  [col addArrangedSubview:pairing_body(@"Using a cable? A USB controller works the moment you plug it in. GameCube controllers: plug a Wii U / Switch GameCube adapter (WUP-028, or a Mayflash in Wii U mode) into USB; iSlippi reads it directly at 1000 Hz.")];
+
+  NSButton* done = pairing_button(@"Done", @"checkmark", self, @selector(close), YES); done.keyEquivalent = @"\r";
+  done.translatesAutoresizingMaskIntoConstraints = NO;
+  NSView* content = self.sheet.contentView;
+  [content addSubview:col]; [content addSubview:done];
+  [NSLayoutConstraint activateConstraints:@[
+    [col.topAnchor constraintEqualToAnchor:content.topAnchor constant:26], [col.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:30],
+    [col.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-30],
+    [done.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-24], [done.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-20]]];
+  [self guideChanged:picker];
+  return self;
+}
+- (void)guideChanged:(NSSegmentedControl*)sender {
+  const host::PairingGuide& g = host::kPairingGuides[MAX(0, MIN(host::kPairingGuideCount - 1, (int)sender.selectedSegment))];
+  self.steps.stringValue = [NSString stringWithUTF8String:g.steps];
+  self.guideIcon.image = symbol([NSString stringWithUTF8String:g.symbol], 22, NSFontWeightRegular) ?: symbol(@"gamecontroller", 22, NSFontWeightRegular);
+}
+- (void)openBluetooth {
+  [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.BluetoothSettings"]];
+}
+- (void)presentOn:(NSWindow*)parent {
+  self.baseline = pairing_guids().UTF8String;
+  [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];   // MFi pads that support discovery pair without Settings
+  self.timer = [NSTimer timerWithTimeInterval:0.5 target:self selector:@selector(tick) userInfo:nil repeats:YES];
+  [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];   // the dashboard runs modally
+  fit_window_for_sheet(parent, self.sheet.frame.size);
+  [parent beginSheet:self.sheet completionHandler:nil];
+}
+- (void)tick {
+  for (const host::ControllerInfo& p : host::window_list_controllers()) {
+    if (self.baseline.find(p.guid + ";") != std::string::npos) continue;
+    self.baseline += p.guid + ";";
+    [self.spinner stopAnimation:nil]; self.spinner.hidden = YES; self.check.hidden = NO;
+    self.status.stringValue = [NSString stringWithFormat:@"%@ is connected and ready to play.", [NSString stringWithUTF8String:p.name.c_str()]];
+    self.status.textColor = NSColor.whiteColor;
+  }
+}
+- (void)close {
+  [GCController stopWirelessControllerDiscovery];
+  [self.timer invalidate]; self.timer = nil;
+  if (self.sheet.sheetParent) [self.sheet.sheetParent endSheet:self.sheet];
+  [self.sheet orderOut:nil];
+  if (self.completion) self.completion();
 }
 @end
 
@@ -401,15 +537,17 @@ API_AVAILABLE(macos(26.0))
   NSView* content = self.sheet.contentView;
 
   NSStackView* left = [[MUColumn alloc] init]; left.spacing = 12; left.translatesAutoresizingMaskIntoConstraints = NO;
-  NSTextField* title = [NSTextField labelWithString:keyboard ? @"KEYBOARD" : name.uppercaseString];
+  NSTextField* title = [NSTextField labelWithString:keyboard ? @"KEYBOARD" : @"CONTROLLER"];
   title.font = meleeFont(22); title.textColor = kYellow();
+  NSTextField* device = label(keyboard ? @"" : name, 12, NSFontWeightSemibold, 0.55);   // which pad this is, when several are connected
+  device.hidden = keyboard;
   self.hint = label(@"", 12, NSFontWeightRegular, 0.7);
   self.diagram = [[MUDiagramView alloc] init];
   self.diagram.translatesAutoresizingMaskIntoConstraints = NO;
   [self.diagram.heightAnchor constraintEqualToAnchor:self.diagram.widthAnchor multiplier:1.0 / host::kDiagramAspect].active = YES;
   __weak MUControllerEditor* weakSelf = self;
   self.diagram.onPick = ^(int part) { [weakSelf startCapture:part sequence:NO]; };
-  for (NSView* v in @[title, self.hint, self.diagram]) [left addArrangedSubview:v];
+  for (NSView* v in @[title, device, self.hint, self.diagram]) [left addArrangedSubview:v];
   if (keyboard) {
     self.modifierSlider = [self slider:20 max:90 value:host::keyboard_map().modifier_percent]; self.modifierValue = [self valueLabel];
     [left addArrangedSubview:[self labeled:@"Modifier stick amount" control:self.modifierSlider value:self.modifierValue]];
@@ -468,6 +606,7 @@ API_AVAILABLE(macos(26.0))
                                                        handler:^NSEvent*(NSEvent* e) { MUControllerEditor* me = weakSelf; return me ? [me handleKey:e] : e; }];
   self.timer = [NSTimer timerWithTimeInterval:1.0 / 60.0 target:self selector:@selector(tick) userInfo:nil repeats:YES];
   [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];   // the dashboard runs modally
+  fit_window_for_sheet(parent, self.sheet.frame.size);
   [parent beginSheet:self.sheet completionHandler:nil];
 }
 - (NSEvent*)handleKey:(NSEvent*)e {
@@ -665,7 +804,8 @@ API_AVAILABLE(macos(26.0))
     [scroll.topAnchor constraintEqualToAnchor:content.topAnchor], [scroll.bottomAnchor constraintEqualToAnchor:content.bottomAnchor], [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor], [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
     [doc.widthAnchor constraintEqualToAnchor:scroll.contentView.widthAnchor],
     [self.stack.topAnchor constraintEqualToAnchor:doc.topAnchor constant:40], [self.stack.bottomAnchor constraintEqualToAnchor:doc.bottomAnchor constant:-36],
-    [self.stack.centerXAnchor constraintEqualToAnchor:doc.centerXAnchor], [self.stack.widthAnchor constraintLessThanOrEqualToConstant:620]]];
+    [self.stack.centerXAnchor constraintEqualToAnchor:doc.centerXAnchor]]];
+  self.maxWidth = [self.stack.widthAnchor constraintLessThanOrEqualToConstant:620]; self.maxWidth.active = YES;
   NSLayoutConstraint* width = [self.stack.widthAnchor constraintEqualToAnchor:doc.widthAnchor constant:-48]; width.priority = NSLayoutPriorityDefaultHigh; width.active = YES;
 
   NSView* hero = [self buildHero];
@@ -686,11 +826,20 @@ API_AVAILABLE(macos(26.0))
   [self.playButton.heightAnchor constraintEqualToConstant:44].active = YES;
   NSTextField* footer = label(@"Needs your own Super Smash Bros. Melee NTSC 1.02 disc image. Nothing from the game ships with the app. Unofficial; not affiliated with the Slippi team or Nintendo.", 11, NSFontWeightRegular, 0.45);
   footer.alignment = NSTextAlignmentCenter;
-  for (NSView* v in @[hero, self.stepsCard, self.rankedCard, self.gamesCard, account, disc, controllers, display, regionCard, discordCard, self.playButton, footer]) [self.stack addArrangedSubview:v];
+  NSStackView* leftCards = [[MUColumn alloc] init]; leftCards.spacing = 14;
+  NSStackView* rightCards = [[MUColumn alloc] init]; rightCards.spacing = 14;
+  for (NSView* v in @[self.stepsCard, self.rankedCard, self.gamesCard, account]) [leftCards addArrangedSubview:v];                 // you
+  for (NSView* v in @[disc, controllers, display, regionCard, discordCard]) [rightCards addArrangedSubview:v];                    // the setup
+  self.cardColumns = [NSStackView stackViewWithViews:@[leftCards, rightCards]];
+  self.cardColumns.orientation = NSUserInterfaceLayoutOrientationVertical; self.cardColumns.alignment = NSLayoutAttributeLeading; self.cardColumns.spacing = 14;
+  self.stackedWidths = @[[leftCards.widthAnchor constraintEqualToAnchor:self.cardColumns.widthAnchor], [rightCards.widthAnchor constraintEqualToAnchor:self.cardColumns.widthAnchor]];
+  [NSLayoutConstraint activateConstraints:self.stackedWidths];
+  for (NSView* v in @[hero, self.cardColumns, self.playButton, footer]) [self.stack addArrangedSubview:v];
   [self.stack setCustomSpacing:26 afterView:hero];
   self.entrance = @[hero, self.stepsCard, self.rankedCard, self.gamesCard, account, disc, controllers, display, regionCard, discordCard, self.playButton];
   for (NSView* v in self.entrance) v.alphaValue = 0;
   [self refreshDisc]; [self refreshAccount]; [self refreshControllers]; [self refreshSteps];
+  [self updateColumns];
   [self loadDashboard];
   self.timer = [NSTimer timerWithTimeInterval:0.03 target:self selector:@selector(tick) userInfo:nil repeats:YES];
   [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSModalPanelRunLoopMode];   // the launcher runs modally
@@ -920,7 +1069,8 @@ API_AVAILABLE(macos(26.0))
   NSStackView* s = [self stackIn:card header:@"CONTROLLERS" symbol:@"gamecontroller"];
   self.controllersStack = [[MUColumn alloc] init]; self.controllersStack.spacing = 8;
   [s addArrangedSubview:self.controllersStack];
-  [s addArrangedSubview:label(@"A Wii U / Switch GameCube adapter (WUP-028, or a Mayflash in Wii U mode) is read directly over USB and asked to poll at 1000 Hz, the rate shown here is what your port actually delivers. Bluetooth and USB pads (PlayStation, Xbox, Switch Pro, MFi) pair through System Settings › Bluetooth or a cable. Configure opens a live view of the controller: remap buttons, set stick deadzones, the trigger press point and rumble. The keyboard layout is configured the same way.", 11, NSFontWeightRegular, 0.6)];
+  [s addArrangedSubview:[self button:@"Connect a Controller…" symbol:@"dot.radiowaves.left.and.right" action:@selector(connectController)]];
+  [s addArrangedSubview:label(@"Connect a Controller walks you through pairing a PlayStation, Xbox, Switch Pro or other Bluetooth controller. A Wii U / Switch GameCube adapter (WUP-028, or a Mayflash in Wii U mode) is read directly over USB and asked to poll at 1000 Hz; the rate shown is what your port actually delivers. Configure opens a live view of the controller: remap buttons, set stick deadzones, the trigger press point and rumble. The keyboard layout is configured the same way.", 11, NSFontWeightRegular, 0.6)];
   return card;
 }
 - (NSView*)buildDisplay {
@@ -1114,6 +1264,14 @@ API_AVAILABLE(macos(26.0))
 - (void)configureController:(NSButton*)sender {
   [self openEditor:[[MUControllerEditor alloc] initWithGuid:objc_getAssociatedObject(sender, "guid") name:objc_getAssociatedObject(sender, "name")]];
 }
+- (void)connectController {
+  if (self.editor) return;
+  MUPairingSheet* pairing = [[MUPairingSheet alloc] init];
+  self.editor = pairing;
+  __weak MULauncherWindow* weakSelf = self;
+  pairing.completion = ^{ MULauncherWindow* me = weakSelf; if (!me) return; me.editor = nil; [me refreshControllers]; };
+  [pairing presentOn:self.window];
+}
 - (void)configureKeyboard { [self openEditor:[[MUControllerEditor alloc] initWithGuid:nil name:@"Keyboard"]]; }
 - (void)openEditor:(MUControllerEditor*)editor {
   if (self.editor) return;
@@ -1223,6 +1381,23 @@ API_AVAILABLE(macos(26.0))
   self.settings->sharpness = (float)self.sharpness.doubleValue;
   [NSApp stopModalWithCode:NSModalResponseOK];
 }
+// A wide window (full screen, a large display) puts the cards in two columns; a narrow one keeps one readable column.
+- (void)windowDidResize:(NSNotification*)notification { [self updateColumns]; }
+- (void)updateColumns {
+  const BOOL wide = self.window.contentView.bounds.size.width >= 1100;
+  if (!self.cardColumns || (self.cardColumns.orientation == NSUserInterfaceLayoutOrientationHorizontal) == wide) return;
+  if (wide) {
+    [NSLayoutConstraint deactivateConstraints:self.stackedWidths];
+    self.cardColumns.orientation = NSUserInterfaceLayoutOrientationHorizontal; self.cardColumns.alignment = NSLayoutAttributeTop;
+    self.cardColumns.distribution = NSStackViewDistributionFillEqually; self.cardColumns.spacing = 18;
+    self.maxWidth.constant = 1240;
+  } else {
+    self.cardColumns.orientation = NSUserInterfaceLayoutOrientationVertical; self.cardColumns.alignment = NSLayoutAttributeLeading;
+    self.cardColumns.distribution = NSStackViewDistributionFill; self.cardColumns.spacing = 14;
+    [NSLayoutConstraint activateConstraints:self.stackedWidths];
+    self.maxWidth.constant = 620;
+  }
+}
 - (void)windowWillClose:(NSNotification*)notification { [NSApp stopModalWithCode:NSModalResponseCancel]; }
 @end
 
@@ -1311,6 +1486,8 @@ bool launcher_run(LauncherSettings& settings, const std::string& error) {
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [g_status.item.button performClick:nil]; });
     [launcher.window makeKeyAndOrderFront:nil];
     [launcher animateIn];
+    if (std::getenv("MELEE_OPEN_PAIRING"))   // screenshot aid: the Connect a Controller sheet
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [launcher connectController]; });
     if (const char* which = std::getenv("MELEE_OPEN_EDITOR")) {   // screenshot aid: "keyboard", or "pad:<guid>:<name>"
       const std::string w = which;
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -1320,6 +1497,10 @@ bool launcher_run(LauncherSettings& settings, const std::string& error) {
           [launcher openEditor:[[MUControllerEditor alloc] initWithGuid:ns(w.substr(4, colon == std::string::npos ? std::string::npos : colon - 4)) name:ns(colon == std::string::npos ? "Controller" : w.substr(colon + 1))]];
         }
       });
+    }
+    if (const char* size = std::getenv("MELEE_LAUNCHER_SIZE")) {   // screenshot aid: "<width>x<height>" in points
+      double w = 0, h = 0;
+      if (std::sscanf(size, "%lfx%lf", &w, &h) == 2) { NSRect f = launcher.window.frame; f.size = NSMakeSize(w, h); [launcher.window setFrame:f display:YES]; [launcher.window center]; [launcher updateColumns]; }
     }
     if (const char* scroll = std::getenv("MELEE_LAUNCHER_SCROLL"))   // screenshot aid: start scrolled down by N points
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{

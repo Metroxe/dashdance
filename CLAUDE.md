@@ -30,7 +30,7 @@ committed; the disc stays where it is.
 | `port/app/main_mac.cpp` | The app entry point for all Apple platforms: options, launcher/dashboard, game loop start. |
 | `port/app/ios/`, `port/app/macos/` | Info.plist templates. |
 | `port/app/icons/AppIcon.icon` | Icon Composer bundle (Slippi mark as a glass layer). `tools/package_macos_app.sh` and CMake compile it with `actool`. |
-| `port/runtime/host/` | Host services: window + input (`window_sdl.cpp`), dashboards (`mac_launcher.mm`, `ios_launcher.mm`), controller mapping, deadzones, trigger point, rumble and the keyboard layout (`input_config.*`), the live GameCube controller in the controller editors (`gc_diagram.*`, drawing the GPL-3.0 ControllerOverlays artwork layers in `port/app/art/controller`; overlay coordinates are in the artwork's 3828 x 2689 units), dashboard model (`dashboard.*`), retrace/timing (`host.cpp`), touch overlay (`overlay.*`), GameCube adapter (`gc_adapter_iokit.cpp` on macOS: IOKit with a 1 ms pipe policy; `gc_adapter_libusb.cpp` elsewhere), controller report-rate measurement (`controller_rate.mm`), in-game menu and HUD (`game_menu.*`, drawn through the Metal overlay's glyph atlas), local notifications (`notify_apple.mm`). |
+| `port/runtime/host/` | Host services: window + input (`window_sdl.cpp`), dashboards (`mac_launcher.mm`, `ios_launcher.mm`), controller mapping, deadzones, trigger point, rumble and the keyboard layout (`input_config.*`), the Connect a Controller pairing steps (`controller_pairing.h`), the live GameCube controller in the controller editors (`gc_diagram.*`, drawing the GPL-3.0 ControllerOverlays artwork layers in `port/app/art/controller`; overlay coordinates are in the artwork's 3828 x 2689 units), dashboard model (`dashboard.*`), retrace/timing (`host.cpp`), touch overlay (`overlay.*`), GameCube adapter (`gc_adapter_iokit.cpp` on macOS: IOKit with a 1 ms pipe policy; `gc_adapter_libusb.cpp` elsewhere), controller report-rate measurement (`controller_rate.mm`), in-game menu and HUD (`game_menu.*`, drawn through the Metal overlay's glyph atlas), local notifications (`notify_apple.mm`). |
 | `port/runtime/gx/` | The GX (GameCube GPU) translation and the Metal renderer (`gx_metal.mm`, `gx_msl.cpp`). |
 | `port/runtime/hle/` | High-level emulation of the GameCube SDK the game calls (disc, pads, audio, memory cards) and Slippi's EXI device, login (`slippi_login.*`), replay parsing (`slippi_history.*`), Discord Rich Presence over the local IPC socket (`discord_rpc.*`). |
 | `port/runtime/ppc/` | Guest CPU context, memory, interpreter fallback. |
@@ -64,7 +64,7 @@ committed; the disc stays where it is.
   background shader compilation off for A/B tests.
 - `MELEE_DASHBOARD_SAMPLE=1` fills the dashboard with sample data; `MELEE_LAUNCHER_SCROLL=<pt>` starts
   it scrolled; `MELEE_MARK=<glyph.png>` shows the Slippi mark when running the bare binary.
-- `MELEE_OPEN_EDITOR=keyboard` (or `pad:<guid>:<name>`) opens the macOS dashboard's controller editor after launch; `MELEE_CONTROLLER_ART=<dir>` loads the controller artwork from another folder;
+- `MELEE_OPEN_EDITOR=keyboard` (or `pad:<guid>:<name>`) opens the dashboard's controller editor after launch (iOS takes `pad:` only); `MELEE_CONTROLLER_ART=<dir>` loads the controller artwork from another folder; `MELEE_OPEN_PAIRING=1` opens Connect a Controller; `MELEE_ORIENTATION=portrait|landscape` rotates the iPhone/iPad dashboard (the game follows the device: rotate the Simulator with Command-arrow), `MELEE_WINDOW_SIZE=WxH` sizes the Vision Pro window and `MELEE_LAUNCHER_SIZE=WxH` the Mac dashboard window;
   `MELEE_MENU_PAGE=controls` or `remap` opens that page of the in-game menu together with `MELEE_MENU_OPEN` (screenshots).
 - `MELEE_MENU_OPEN=<retrace>` opens the in-game menu at that frame and `MELEE_HUD=1` turns the HUD on (screenshots);
   `MELEE_DUMP_GLYPHS=<file.pgm>` writes the text atlas; `MELEE_DISCORD_APP_ID=<id>` points Discord presence at another application (the built-in id,
@@ -83,6 +83,7 @@ committed; the disc stays where it is.
 - Colours and glass tints come from the small theme helpers at the top of each launcher file; do not
   scatter literal colours.
 - Keep the simulation thread free of anything that can block (display, GPU, disk, shader compiles).
+- Every screen adapts: two columns of cards when the window is wide (Mac from 1100 pt, iPad and Vision Pro from 960 pt), a side-by-side controller editor in landscape, and touch controls, HUD and menu inside the safe area. Check portrait and landscape on iPhone and iPad and a narrow and wide window on Mac and Vision Pro with the aids above.
 
 ## Verification checklist for a change
 

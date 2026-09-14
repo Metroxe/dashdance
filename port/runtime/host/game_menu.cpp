@@ -381,7 +381,9 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
   std::lock_guard<std::mutex> lock(g_mutex);
   g_touch_visible = touch_controls_visible;
   const RuntimeSettings s = g_settings;
-  const float unit = std::clamp(wh / 30.0f, 12.0f, 40.0f);   // line height that suits the window
+  const float unit = std::clamp(std::min(ww, wh) / 30.0f, 12.0f, 40.0f);   // line height that suits the window, portrait or landscape
+  float safe_t = 0, safe_l = 0, safe_r = 0, safe_b = 0;
+  window_safe_insets(safe_t, safe_l, safe_r, safe_b);   // keep clear of the island, the rounded corners and the home indicator
   // Performance HUD: one line, top-left.
   if (s.hud) {
     GcAdapterStatus adapter; const bool have_adapter = gcadapter_status(adapter);
@@ -389,13 +391,14 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     std::snprintf(line, sizeof line, "sim %.1f ms   display %.0f Hz   late %llu%s%s", last_sim_frame_ms(), window_refresh_rate(), (unsigned long long)late_frame_count(),
                   have_adapter ? "   GC adapter " : "", have_adapter ? (adapter.report_hz >= 900 ? "1000 Hz" : adapter.report_hz > 0 ? "125 Hz" : "") : "");
     const float h = unit * 0.7f, pad = h * 0.4f, w = h * 0.55f * (float)std::strlen(line) + pad * 2;
-    out.shapes.push_back({pad, pad, pad + w, pad + h + pad * 1.5f, 0.0f, 0.0f, 0.0f, 0.55f, h * 0.35f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
-    out.texts.push_back({pad * 2, pad + pad * 0.6f, h, 1, 1, 1, 0.92f, 0, line});
+    const float hx = pad + safe_l, hy = pad + safe_t;
+    out.shapes.push_back({hx, hy, hx + w, hy + h + pad * 1.5f, 0.0f, 0.0f, 0.0f, 0.55f, h * 0.35f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
+    out.texts.push_back({hx + pad, hy + pad * 0.6f, h, 1, 1, 1, 0.92f, 0, line});
   }
   if (!g_open.load()) {
     if (touch_controls_visible) {   // MENU button, top-right
       const float h = unit * 1.1f, w = h * 2.6f, m = unit * 0.5f;
-      g_menu_button[0] = ww - m - w; g_menu_button[1] = m; g_menu_button[2] = ww - m; g_menu_button[3] = m + h;
+      g_menu_button[0] = ww - m - safe_r - w; g_menu_button[1] = m + safe_t; g_menu_button[2] = ww - m - safe_r; g_menu_button[3] = m + safe_t + h;
       out.shapes.push_back({g_menu_button[0], g_menu_button[1], g_menu_button[2], g_menu_button[3], 1, 1, 1, 0.18f, h * 0.5f, 2.0f, 0.0f, 0, 0.0f, 0.0f});
       out.texts.push_back({g_menu_button[0] + w * 0.5f, g_menu_button[1] + h * 0.22f, h * 0.56f, 1, 1, 1, 0.9f, 1, "MENU"});
     }
@@ -406,9 +409,10 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
   const std::vector<int> rows = page_rows();
   const int body_rows = g_page == Page::Remap ? 9 : (int)rows.size();
   const float row_h = unit * 1.45f, pad = unit * 0.9f, title_h = unit * 1.3f;
-  const float panel_w = std::min((float)ww - 2 * pad, unit * 24.0f);
+  const float avail_w = (float)ww - safe_l - safe_r, avail_h = (float)wh - safe_t - safe_b;
+  const float panel_w = std::min(avail_w - 2 * pad, unit * 24.0f);
   const float panel_h = pad + title_h + unit * 0.5f + row_h * body_rows + unit * 1.6f + pad;
-  const float x0 = (ww - panel_w) * 0.5f, y0 = std::max(pad, (wh - panel_h) * 0.5f), x1 = x0 + panel_w, y1 = y0 + panel_h;
+  const float x0 = safe_l + (avail_w - panel_w) * 0.5f, y0 = safe_t + std::max(pad, (avail_h - panel_h) * 0.5f), x1 = x0 + panel_w, y1 = y0 + panel_h;
   out.shapes.push_back({x0, y0, x1, y1, 0.03f, 0.04f, 0.12f, 0.985f, unit * 0.7f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
   out.shapes.push_back({x0, y0, x1, y1, 0.5f, 0.6f, 1.0f, 0.25f, unit * 0.7f, 1.5f, 0.0f, 0, 0.0f, 0.0f});
   // Title bar in Melee's angled yellow.

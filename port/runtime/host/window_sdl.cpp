@@ -45,6 +45,7 @@ std::mutex g_ui_mutex;
 PadState g_ui_pad{};
 bool g_ui_gamecube = false;
 int g_client_w = 0, g_client_h = 0;
+std::atomic<float> g_safe_top{0.0f}, g_safe_left{0.0f}, g_safe_right{0.0f}, g_safe_bottom{0.0f};   // pixels; read by the renderer thread
 std::vector<SDL_Gamepad*> g_gamepads;
 std::string gamepad_guid(SDL_Gamepad* pad) {
   char buf[64];
@@ -93,7 +94,9 @@ void touch_layout() {
   const float pad = 24.0f * t.pt, W = (float)t.w, H_full = (float)t.h;
   // Portrait (iPhone, iPad held upright): the game sits at the top, the controls fill the rest.
   const bool portrait = H_full > W * 1.05f;
-  const float top = portrait ? W / g_touch_aspect : 0.0f, H = std::max(H_full - top, 120.0f);
+  const float safe_l = g_safe_left.load(), safe_r = g_safe_right.load(), safe_b = g_safe_bottom.load();
+  const float top = portrait ? g_safe_top.load() + W / g_touch_aspect : g_safe_top.load();   // below the island and the game
+  const float H = std::max(H_full - top - safe_b, 120.0f);                                   // above the home indicator
   const float col_h = H - 2 * pad;
   const float col_w = (portrait ? std::min(W * 0.42f, 320.0f * t.pt) : std::min(std::max(200.0f * t.pt, H * 0.36f), W * 0.28f)) * g_touch_scale;
   const float trig_h = col_h * 0.13f, mid = std::min(col_w, col_h * 0.60f), row_h = col_h * 0.27f;
@@ -119,8 +122,8 @@ void touch_layout() {
       t.cstick.rect = circle(x0 + col_w - btn_d * 0.5f, y_row + btn_d * 0.5f, btn_d * 0.5f); t.cstick.radius = btn_d * 0.5f; t.cstick.c = true;
     }
   };
-  column(pad, true);
-  column(W - pad - col_w, false);
+  column(pad + safe_l, true);                 // clear of the island in landscape
+  column(W - pad - col_w - safe_r, false);
   for (size_t i = 0; i < t.buttons.size() && i < pressed.size(); ++i) t.buttons[i].pressed = pressed[i];
 }
 bool physical_gamepad_connected() {
@@ -257,6 +260,16 @@ void refresh_client_size() {
   std::lock_guard<std::mutex> lock(g_touch_mutex);   // the touch layout reads these from other threads
   g_client_w = std::max(w, 1); g_client_h = std::max(h, 1);
   g_pixels_per_point = pw > 0 ? (float)g_client_w / (float)pw : 1.0f;
+  SDL_Rect safe{};
+  float top = 0, left = 0, right = 0, bottom = 0;
+  if (SDL_GetWindowSafeArea(g_window, &safe) && safe.w > 0 && safe.h > 0) {
+    top = std::max(safe.y, 0) * g_pixels_per_point; left = std::max(safe.x, 0) * g_pixels_per_point;
+    right = std::max(pw - safe.x - safe.w, 0) * g_pixels_per_point; bottom = std::max(ph - safe.y - safe.h, 0) * g_pixels_per_point;
+  }
+  if (top != g_safe_top.load() || left != g_safe_left.load() || right != g_safe_right.load() || bottom != g_safe_bottom.load()) {
+    g_safe_top.store(top); g_safe_left.store(left); g_safe_right.store(right); g_safe_bottom.store(bottom);
+    g_touch.w = 0;   // rotation moves the island and the home indicator: lay the controls out again
+  }
 }
 
 void open_gamepad(SDL_JoystickID id) {
@@ -430,6 +443,8 @@ void window_pump() {
   }
 }
 
+float window_safe_top_pixels() { return g_safe_top.load(); }
+void window_safe_insets(float& top, float& left, float& right, float& bottom) { top = g_safe_top.load(); left = g_safe_left.load(); right = g_safe_right.load(); bottom = g_safe_bottom.load(); }
 void window_set_fullscreen(bool enabled) { if (g_window) SDL_SetWindowFullscreen(g_window, enabled); }
 
 // ---- launcher services: controllers without a window

@@ -78,7 +78,7 @@ You need an Apple Silicon Mac (or an iPad, iPhone or Vision Pro), your own **Sup
 
 ### Design
 
-The app follows Apple's current design language. On macOS 26 and iOS 26 the dashboard is built from real Liquid Glass: `NSGlassEffectView` and `UIGlassEffect` cards inside a glass container (so neighbouring glass merges and renders in one pass), glass buttons with a prominent tinted Play, and a glass disc holding the Slippi mark. Older systems get the same layout on system materials. The app icon is an Icon Composer bundle (`port/app/icons/AppIcon.icon`) compiled by `actool`: the Slippi mark as a glass layer over the Slippi green, so macOS and iOS render it with the system's specular highlights, dark and tinted variants included. Melee's own visual grammar stays: the angled yellow section headers and italic display type are the game's menu style. Haptics are used sparingly (Play, sign-in result), sliders show their values, and the Mac has a real menu bar.
+The app follows Apple's current design language. On macOS 26 and iOS 26 the dashboard is built from real Liquid Glass: `NSGlassEffectView` and `UIGlassEffect` cards inside a glass container (so neighbouring glass merges and renders in one pass), glass buttons with a prominent tinted Play, and a glass disc holding the Slippi mark. Older systems get the same layout on system materials. The app icon is an Icon Composer bundle (`port/app/icons/AppIcon.icon`) compiled by `actool`: the Slippi mark as a glass layer over the Slippi green, so macOS and iOS render it with the system's specular highlights, dark and tinted variants included. Melee's own visual grammar stays: the angled yellow section headers and italic display type are the game's menu style. Haptics are used sparingly (Play, sign-in result), sliders show their values, and the Mac has a real menu bar. Every screen adapts to its space: on a wide Mac window, an iPad in landscape, a 13-inch iPad or a Vision Pro window the dashboard's cards sit in two columns, phones keep one column in portrait and landscape, the controller editor puts the controller next to its settings when there is room, and the touch controls, performance HUD and in-game menu stay clear of the Dynamic Island, rounded corners and home indicator.
 
 ### The dashboard
 
@@ -89,7 +89,7 @@ The app follows Apple's current design language. On macOS 26 and iOS 26 the dash
 | **Recent games** | Your last games parsed from the `.slp` replays the app writes: characters, opponent, stage, duration, and whether you won. |
 | **Slippi Online account** | Sign in, sign out, password reset. The session is kept on the device so ranked stats reload on every launch. |
 | **Game disc** | Choose or drop the disc image. |
-| **Controllers** | Every connected controller, its GameCube port (auto or fixed 1–4), and a remap flow: click a GameCube control, press the button you want. Mappings are saved per controller. |
+| **Controllers** | Every connected controller and the keyboard, each controller's GameCube port (auto or fixed 1–4), a Configure button that opens the controller editor, and Connect a Controller, which walks you through Bluetooth pairing (below). Settings are saved per controller. |
 | **Display & performance** | Internal resolution (auto picks the display), anisotropic filtering, display sync, widescreen, sharpening, full screen on macOS, plus the GPU and the display's refresh rate so you can see what the app is running on. |
 | **On-screen controls** (iPad, iPhone) | Opacity and size of the touch controller. |
 | **Menu bar extra** (Mac) | The Slippi mark in the menu bar with your rank next to it. The menu shows rating, record, placement, mains and your recent games, and has Play, Show iSlippi, Sign Out and Quit, from anywhere, including while a game is running. |
@@ -120,6 +120,22 @@ The default keyboard layout; every key can be changed.
 Any controller SDL recognises works out of the box, over Bluetooth or a cable: PlayStation, Xbox, Switch Pro, MFi and most USB pads. Ports and button mappings are managed from the Controllers card on the dashboard, which also shows each controller's measured report rate (move a stick for a second and it settles).
 
 **Configuring controls.** Every controller, and the keyboard, has a Configure button on the dashboard. It opens a live GameCube controller: whatever you press lights up, the sticks follow your thumbs inside their deadzone rings, and the triggers fill as you squeeze. Click a button on the picture or in the list and press the input you want, or use Map all to go through every control in order. Per controller you also set the stick and C-stick deadzones, the trigger press point (how far an analog trigger travels before it also counts as a digital L or R press), rumble, and swapped sticks. The keyboard maps the twelve buttons, both sticks' four directions and a walk/tilt modifier key with its stick amount. The same settings are in the in-game menu under Controls, including a step-by-step remap you can run without leaving the game. Everything is saved per controller.
+
+<div align="center">
+<img src="docs/images/mac-controller-editor.jpg" width="520" alt="The Mac keyboard editor: a GameCube controller with direction targets around both sticks, the modifier slider and the list of key bindings">
+&nbsp;&nbsp;
+<img src="docs/images/iphone-controller-editor.jpg" width="220" alt="The controller editor on iPhone: the GameCube controller, Map all buttons, Test rumble and the button list">
+<br><sub>The controller editor for a Bluetooth pad on the Mac and on iPhone. The controller picture is ControllerOverlays' GameCube controller by Kat21.</sub>
+</div>
+
+**Connecting a controller.** Press Connect a Controller on the dashboard. Pick PlayStation, Xbox, Switch Pro or Other to see how that controller enters pairing mode, open Bluetooth settings from the same screen, and the screen confirms the moment the controller arrives. Apple does not let apps pair Bluetooth controllers themselves, so the pairing step happens in System Settings or Settings; it is only needed once per controller. USB and USB-C controllers need no pairing, and a GameCube adapter on the Mac is read directly.
+
+<div align="center">
+<img src="docs/images/mac-connect-controller.jpg" width="440" alt="Connect a Controller on the Mac: pairing steps for PlayStation, Xbox, Switch Pro and other controllers, Open Bluetooth Settings, and a waiting indicator">
+&nbsp;&nbsp;
+<img src="docs/images/iphone-connect-controller.jpg" width="200" alt="Connect a Controller on iPhone">
+<br><sub>Connect a Controller on the Mac and on iPhone.</sub>
+</div>
 
 ### GameCube controllers and the adapter (macOS)
 
