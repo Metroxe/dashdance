@@ -3,6 +3,7 @@
 // replace physical devices when present.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "host.h"
+#include "controller_rate.h"
 #include "input_config.h"
 #include "input_script.h"
 #include "overlay.h"
@@ -426,6 +427,7 @@ void window_set_fullscreen(bool enabled) { if (g_window) SDL_SetWindowFullscreen
 
 // ---- launcher services: controllers without a window
 void window_input_init() {
+  controller_rate_init();
   static bool done = false;
   if (done) return;
   done = true;
@@ -436,6 +438,14 @@ void window_input_init() {
 }
 std::vector<ControllerInfo> window_list_controllers() {
   std::vector<ControllerInfo> list;
+  GcAdapterStatus adapter;
+  if (gcadapter_status(adapter)) {
+    ControllerInfo info;
+    info.name = "GameCube Controller Adapter"; info.guid = "gc-adapter"; info.is_gamecube_adapter = true; info.wired = true;
+    info.adapter_ports = adapter.ports; info.adapter_interval_ms = adapter.interval_ms; info.report_hz = adapter.report_hz;
+    list.push_back(info);
+  }
+  const std::vector<ControllerReport> reports = controller_reports();
   SDL_PumpEvents();
   SDL_Event event;
   while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_GAMEPAD_ADDED, SDL_EVENT_GAMEPAD_REMOVED) > 0) {
@@ -448,6 +458,8 @@ std::vector<ControllerInfo> window_list_controllers() {
     info.guid = gamepad_guid(pad);
     info.instance_id = SDL_GetGamepadID(pad);
     if (const ControllerConfig* cfg = controller_config_for(info.guid)) info.assigned_port = cfg->port;
+    for (const ControllerReport& r : reports)
+      if (r.name == info.name || info.name.find(r.name) != std::string::npos || r.name.find(info.name) != std::string::npos) { info.report_hz = r.hz; info.wired = r.wired; break; }
     list.push_back(info);
   }
   return list;

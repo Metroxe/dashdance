@@ -17,6 +17,22 @@
 #include <string>
 #include <vector>
 
+// One line describing a controller's connection and measured report rate, for the dashboards.
+static std::string controller_rate_line(const host::ControllerInfo& pad) {
+  char b[160];
+  if (pad.is_gamecube_adapter) {
+    std::string ports;
+    for (int p = 0; p < 4; ++p) if (pad.adapter_ports & (1u << p)) ports += (ports.empty() ? "port " : ", ") + std::to_string(p + 1);
+    if (pad.report_hz <= 0) std::snprintf(b, sizeof b, "USB · %s · measuring the polling rate…", ports.empty() ? "no controller plugged in" : ports.c_str());
+    else if (pad.report_hz >= 900) std::snprintf(b, sizeof b, "USB · %s · polling at %.0f Hz (1 ms)", ports.empty() ? "no controller plugged in" : ports.c_str(), pad.report_hz);
+    else std::snprintf(b, sizeof b, "USB · %s · polling at %.0f Hz; the host kept the adapter's default, try another USB port or hub", ports.empty() ? "no controller plugged in" : ports.c_str(), pad.report_hz);
+    return b;
+  }
+  if (pad.report_hz <= 0) std::snprintf(b, sizeof b, "%s · move a stick to measure the report rate", pad.wired ? "Wired" : "Bluetooth");
+  else std::snprintf(b, sizeof b, "%s · reports at %.0f Hz (%.1f ms)", pad.wired ? "Wired" : "Bluetooth", pad.report_hz, 1000.0 / pad.report_hz);
+  return b;
+}
+
 @class MULauncherWindow;
 // Menu bar extra (NSStatusItem): the Slippi mark in the menu bar with the player's rank, rating and
 // record, the last games, and the actions that make sense from anywhere: Play, show the dashboard,
@@ -289,7 +305,7 @@ API_AVAILABLE(macos(26.0))
 @property(nonatomic) NSView* rankedCard; @property(nonatomic) NSTextField* rankLabel; @property(nonatomic) NSTextField* ratingLabel; @property(nonatomic) NSTextField* recordLabel; @property(nonatomic) NSView* winTrack; @property(nonatomic) NSView* winBar; @property(nonatomic) NSLayoutConstraint* winBarWidth; @property(nonatomic) NSTextField* placementLabel; @property(nonatomic) NSTextField* mainsLabel;
 @property(nonatomic) NSView* gamesCard; @property(nonatomic) NSStackView* gamesStack;
 // controllers
-@property(nonatomic) NSStackView* controllersStack; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic, copy) NSString* remapGuid; @property(nonatomic) int capturing; @property(nonatomic) BOOL armed; @property(nonatomic) NSArray<NSButton*>* remapButtons;
+@property(nonatomic) NSStackView* controllersStack; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic) std::string controllerSignature; @property(nonatomic) unsigned tickCount; @property(nonatomic, copy) NSString* remapGuid; @property(nonatomic) int capturing; @property(nonatomic) BOOL armed; @property(nonatomic) NSArray<NSButton*>* remapButtons;
 // display
 @property(nonatomic) NSSegmentedControl* scaleControl; @property(nonatomic) NSSegmentedControl* anisoControl; @property(nonatomic) NSSwitch* vsyncSwitch; @property(nonatomic) NSSwitch* fullscreenSwitch; @property(nonatomic) NSSwitch* widescreenSwitch; @property(nonatomic) NSSlider* sharpness; @property(nonatomic) NSSwitch* onlineSwitch;
 - (void)acceptDroppedDisc:(NSString*)path;
@@ -605,7 +621,7 @@ API_AVAILABLE(macos(26.0))
   NSStackView* s = [self stackIn:card header:@"CONTROLLERS" symbol:@"gamecontroller"];
   self.controllersStack = [[MUColumn alloc] init]; self.controllersStack.spacing = 8;
   [s addArrangedSubview:self.controllersStack];
-  [s addArrangedSubview:label(@"A Wii U / Switch GameCube adapter (WUP-028) is read directly over USB with the exact polling the real game uses. Bluetooth and USB pads (PlayStation, Xbox, Switch Pro, MFi) pair through System Settings › Bluetooth or a cable. Assign each one a port and remap buttons here; the keyboard always works.", 11, NSFontWeightRegular, 0.6)];
+  [s addArrangedSubview:label(@"A Wii U / Switch GameCube adapter (WUP-028, or a Mayflash in Wii U mode) is read directly over USB and asked to poll at 1000 Hz, the rate shown here is what your port actually delivers. Bluetooth and USB pads (PlayStation, Xbox, Switch Pro, MFi) pair through System Settings › Bluetooth or a cable. Assign each one a port and remap buttons here; the keyboard always works.", 11, NSFontWeightRegular, 0.6)];
   return card;
 }
 - (NSView*)buildDisplay {
@@ -710,14 +726,18 @@ API_AVAILABLE(macos(26.0))
     NSStackView* row = [[NSStackView alloc] init]; row.orientation = NSUserInterfaceLayoutOrientationHorizontal; row.spacing = 10; row.alignment = NSLayoutAttributeCenterY;
     NSImageView* icon = [NSImageView imageViewWithImage:symbol(pad.is_gamecube_adapter ? @"cable.connector" : @"gamecontroller.fill", 15, NSFontWeightMedium)];
     icon.contentTintColor = kYellow(); [icon.widthAnchor constraintEqualToConstant:22].active = YES;
-    NSTextField* name = label(ns(pad.name + (pad.is_gamecube_adapter ? "  ·  GameCube adapter" : "")), 13, NSFontWeightSemibold, 1);
+    NSStackView* text = [[NSStackView alloc] init]; text.orientation = NSUserInterfaceLayoutOrientationVertical; text.alignment = NSLayoutAttributeLeading; text.spacing = 1;
+    [text addArrangedSubview:label(ns(pad.name), 13, NSFontWeightSemibold, 1)];
+    [text addArrangedSubview:label(ns(controller_rate_line(pad)), 11, NSFontWeightRegular, 0.6)];
+    NSView* name = text;
     [name setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     NSString* guid = ns(pad.guid);
     NSPopUpButton* port = [[NSPopUpButton alloc] init]; port.controlSize = NSControlSizeRegular;
     [port addItemsWithTitles:@[@"Auto port", @"Port 1", @"Port 2", @"Port 3", @"Port 4"]];
     [port selectItemAtIndex:MAX(0, MIN(4, pad.assigned_port))];
     port.target = self; port.action = @selector(portChanged:); objc_setAssociatedObject(port, "guid", guid, OBJC_ASSOCIATION_COPY);
-    [row addArrangedSubview:icon]; [row addArrangedSubview:name]; [row addArrangedSubview:port];
+    [row addArrangedSubview:icon]; [row addArrangedSubview:name];
+    if (!pad.is_gamecube_adapter) [row addArrangedSubview:port];
     if (!pad.is_gamecube_adapter) {
       NSButton* remap = [NSButton buttonWithTitle:[self.remapGuid isEqualToString:guid] ? @"Done" : @"Remap…" target:self action:@selector(toggleRemap:)];
       remap.bezelStyle = NSBezelStyleRounded; objc_setAssociatedObject(remap, "guid", guid, OBJC_ASSOCIATION_COPY);
@@ -766,7 +786,11 @@ API_AVAILABLE(macos(26.0))
 }
 - (void)tick {
   if (self.closed) return;
-  if (host::window_list_controllers().size() != self.controllerCount) [self refreshControllers];
+  if (++self.tickCount % 33 == 0) {   // about once a second: controllers coming and going, and their measured rates
+    std::string sig;
+    for (const host::ControllerInfo& p : host::window_list_controllers()) sig += p.guid + ":" + std::to_string((int)(p.report_hz / 10)) + ":" + std::to_string(p.adapter_ports) + ";";
+    if (sig != self.controllerSignature) { self.controllerSignature = sig; [self refreshControllers]; }
+  }
   if (self.capturing < 0 || !self.remapGuid) return;
   const int input = host::window_capture_input(self.remapGuid.UTF8String);
   if (!self.armed) { if (input == host::kUnbound) self.armed = YES; return; }

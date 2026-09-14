@@ -40,13 +40,13 @@ else
   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 fi
 
-step "Homebrew packages (cmake ninja python libusb)"
+step "Homebrew packages (cmake ninja python)"
 if ! command -v brew >/dev/null; then
   echo "Homebrew is not installed; installing it (https://brew.sh)…"
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   eval "$(/opt/homebrew/bin/brew shellenv)"
 fi
-for pkg in cmake ninja python libusb; do brew list --versions "$pkg" >/dev/null 2>&1 || brew install "$pkg"; done
+for pkg in cmake ninja python; do brew list --versions "$pkg" >/dev/null 2>&1 || brew install "$pkg"; done
 python3 -c "import PIL" 2>/dev/null || python3 -m pip install --quiet --user pillow 2>/dev/null || true
 
 step "doldecomp/melee (function names and animation helpers the port reads at build time)"

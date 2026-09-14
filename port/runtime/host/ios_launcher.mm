@@ -262,6 +262,22 @@ int display_max_hz() {
 - (void)finish { [self dismissViewControllerAnimated:YES completion:nil]; }
 @end
 
+// One line describing a controller's connection and measured report rate, for the dashboards.
+static std::string controller_rate_line(const host::ControllerInfo& pad) {
+  char b[160];
+  if (pad.is_gamecube_adapter) {
+    std::string ports;
+    for (int p = 0; p < 4; ++p) if (pad.adapter_ports & (1u << p)) ports += (ports.empty() ? "port " : ", ") + std::to_string(p + 1);
+    if (pad.report_hz <= 0) std::snprintf(b, sizeof b, "USB · %s · measuring the polling rate…", ports.empty() ? "no controller plugged in" : ports.c_str());
+    else if (pad.report_hz >= 900) std::snprintf(b, sizeof b, "USB · %s · polling at %.0f Hz (1 ms)", ports.empty() ? "no controller plugged in" : ports.c_str(), pad.report_hz);
+    else std::snprintf(b, sizeof b, "USB · %s · polling at %.0f Hz; the host kept the adapter's default, try another USB port or hub", ports.empty() ? "no controller plugged in" : ports.c_str(), pad.report_hz);
+    return b;
+  }
+  if (pad.report_hz <= 0) std::snprintf(b, sizeof b, "%s · move a stick to measure the report rate", pad.wired ? "Wired" : "Bluetooth");
+  else std::snprintf(b, sizeof b, "%s · reports at %.0f Hz (%.1f ms)", pad.wired ? "Wired" : "Bluetooth", pad.report_hz, 1000.0 / pad.report_hz);
+  return b;
+}
+
 // ---- Dashboard
 @interface MULauncherController () <UIDocumentPickerDelegate, UITextFieldDelegate>
 @property(nonatomic) host::LauncherSettings* settings;
@@ -284,7 +300,7 @@ int display_max_hz() {
 // games
 @property(nonatomic) UIView* gamesCard; @property(nonatomic) UIStackView* gamesStack;
 // controllers
-@property(nonatomic) UIStackView* controllersStack; @property(nonatomic) NSTimer* controllerTimer; @property(nonatomic) NSUInteger controllerCount;
+@property(nonatomic) UIStackView* controllersStack; @property(nonatomic) NSTimer* controllerTimer; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic) std::string controllerSignature;
 // display
 @property(nonatomic) UISegmentedControl* scaleControl; @property(nonatomic) UISegmentedControl* anisoControl; @property(nonatomic) UISwitch* vsyncSwitch; @property(nonatomic) UISwitch* widescreenSwitch; @property(nonatomic) UISlider* sharpnessSlider; @property(nonatomic) UISwitch* onlineSwitch;
 @property(nonatomic) UISlider* overlaySlider; @property(nonatomic) UISlider* overlayScaleSlider;
@@ -648,7 +664,7 @@ int display_max_hz() {
   [s addArrangedSubview:[self header:@"CONTROLLERS" symbol:@"gamecontroller"]];
   self.controllersStack = [[UIStackView alloc] init]; self.controllersStack.axis = UILayoutConstraintAxisVertical; self.controllersStack.spacing = 10;
   [s addArrangedSubview:self.controllersStack];
-  UILabel* help = [self label:@"Bluetooth and USB-C controllers (PlayStation, Xbox, Switch Pro, MFi) connect through iPadOS Settings › Bluetooth or a cable, then appear here. Assign each one a GameCube port and remap buttons. The on-screen controller hides itself while a controller is connected." size:13 weight:UIFontWeightRegular alpha:0.6];
+  UILabel* help = [self label:@"Bluetooth and USB-C controllers (PlayStation, Xbox, Switch Pro, MFi) connect through Settings › Bluetooth or a cable, then appear here with their measured report rate. Assign each one a GameCube port and remap buttons. The on-screen controller hides itself while a controller is connected. GameCube adapters need a Mac: iOS does not give apps raw USB access." size:13 weight:UIFontWeightRegular alpha:0.6];
   [s addArrangedSubview:help];
   return card;
 }
@@ -772,8 +788,10 @@ int display_max_hz() {
     UIImageView* icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"gamecontroller.fill"]];
     icon.tintColor = kYellow(); icon.contentMode = UIViewContentModeScaleAspectFit; [icon.widthAnchor constraintEqualToConstant:26].active = YES;
     [icon setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    UIStackView* text = [[UIStackView alloc] init]; text.axis = UILayoutConstraintAxisVertical; text.spacing = 2;
     UILabel* name = [self label:ns(pad.name) size:15 weight:UIFontWeightSemibold alpha:1];
-    [name setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    [text addArrangedSubview:name]; [text addArrangedSubview:[self label:ns(controller_rate_line(pad)) size:12 weight:UIFontWeightRegular alpha:0.6]];
+    [text setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
     NSMutableArray<UIAction*>* ports = [NSMutableArray array];
     NSString* guid = ns(pad.guid);
     for (int p = 0; p <= 4; ++p) {
@@ -796,12 +814,18 @@ int display_max_hz() {
       rm.config = cfg; rm.controllerName = name.text;
       rm.modalPresentationStyle = UIModalPresentationFormSheet;
       [self presentViewController:rm animated:YES completion:nil]; }]];
-    [row addArrangedSubview:icon]; [row addArrangedSubview:name]; [row addArrangedSubview:portButton]; [row addArrangedSubview:remap];
+    [row addArrangedSubview:icon]; [row addArrangedSubview:text];
+    if (!pad.is_gamecube_adapter) { [row addArrangedSubview:portButton]; [row addArrangedSubview:remap]; }
     [self.controllersStack addArrangedSubview:row];
   }
   [self refreshSteps];
 }
-- (void)controllerTick { if (host::window_list_controllers().size() != self.controllerCount) [self refreshControllers]; }
+- (void)controllerTick {
+  // Rebuild the card when a controller comes or goes, or when a measured rate changes (rounded, so it settles).
+  std::string sig;
+  for (const host::ControllerInfo& p : host::window_list_controllers()) sig += p.guid + ":" + std::to_string((int)(p.report_hz / 10)) + ":" + std::to_string(p.adapter_ports) + ";";
+  if (sig != self.controllerSignature) { self.controllerSignature = sig; [self refreshControllers]; }
+}
 - (void)refreshDisc {
   std::vector<std::string> discs = documents_discs(nullptr);
   if (!self.settings->iso.empty()) { bool present = false; for (const std::string& d : discs) if (d == self.settings->iso) present = true; if (!present) self.settings->iso.clear(); }

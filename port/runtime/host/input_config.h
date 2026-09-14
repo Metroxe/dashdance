@@ -33,7 +33,13 @@ void upsert_controller_config(const ControllerConfig& config);
 std::string physical_input_name(int input);   // "A", "Left trigger", ...
 
 // Live controllers, for the launcher UI (requires the gamepad subsystem: window_input_init()).
-struct ControllerInfo { std::string name, guid; uint32_t instance_id = 0; int assigned_port = 0; bool is_gamecube_adapter = false; };
+struct ControllerInfo {
+  std::string name, guid; uint32_t instance_id = 0; int assigned_port = 0; bool is_gamecube_adapter = false;
+  double report_hz = 0.0;      // measured report rate (0 = not measured yet); for the adapter, the polled rate
+  bool wired = false;          // connector rather than Bluetooth
+  uint32_t adapter_ports = 0;  // GameCube adapter: bit per port with a controller plugged in
+  int adapter_interval_ms = 0; // GameCube adapter: the polling interval the USB host accepted
+};
 void window_input_init();                              // SDL gamepad subsystem without a window
 std::vector<ControllerInfo> window_list_controllers();
 // Returns the physical input pressed since the previous call on the given controller (kUnbound if none).

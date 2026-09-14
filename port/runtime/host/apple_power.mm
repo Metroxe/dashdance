@@ -10,6 +10,7 @@
 #import <UIKit/UIKit.h>
 #endif
 #include "host.h"
+#include "gx_metal.h"
 
 namespace host {
 namespace {
@@ -27,6 +28,16 @@ const char* thermal_name(NSProcessInfoThermalState state) {
 }  // namespace
 
 const char* thermal_state_name() { return thermal_name(NSProcessInfo.processInfo.thermalState); }
+namespace {
+int g_device_cap = 0;
+// Phones have the least thermal headroom: cap the internal resolution at 2x, and when the system reports
+// serious or critical heat drop to 2x / 1x so the frame rate holds instead of the resolution.
+void apply_caps() {
+  const NSProcessInfoThermalState st = NSProcessInfo.processInfo.thermalState;
+  const int thermal = st == NSProcessInfoThermalStateCritical ? 1 : st == NSProcessInfoThermalStateSerious ? 2 : 0;
+  gx::metal_scale_caps(g_device_cap, thermal);
+}
+}  // namespace
 
 void power_play_begin() {
   @autoreleasepool {
@@ -36,11 +47,13 @@ void power_play_begin() {
                                                                 reason:@"Playing Super Smash Bros. Melee"];
 #else
     UIApplication.sharedApplication.idleTimerDisabled = YES;   // the game is played with a controller: never dim the screen
+    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone) g_device_cap = 2;
 #endif
+    apply_caps();
     log("power: latency-critical activity on, display sleep off, thermal state %s", thermal_state_name());
     if (!g_thermal_observer)
       g_thermal_observer = [NSNotificationCenter.defaultCenter addObserverForName:NSProcessInfoThermalStateDidChangeNotification object:nil queue:nil
-                                                                        usingBlock:^(NSNotification*) { log("power: thermal state now %s", thermal_state_name()); }];
+                                                                        usingBlock:^(NSNotification*) { log("power: thermal state now %s", thermal_state_name()); apply_caps(); }];
   }
 }
 

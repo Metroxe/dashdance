@@ -144,6 +144,8 @@ fragment float4 overlay_ps(OvO i [[stage_in]], constant OvShape* shapes [[buffer
 }
 )";
 
+std::atomic<int> g_device_scale_cap{0}, g_thermal_scale_cap{0};
+
 class MetalBackend final : public Backend {
  public:
   MetalBackend(CAMetalLayer* layer, int w, int h, const MetalOptions& o) : layer_(layer), opts_(o), client_w_(w), client_h_(h) { init(); }
@@ -172,6 +174,7 @@ class MetalBackend final : public Backend {
     if (resample) { wait_idle(); samplers_.clear(); }
   }
   uint64_t frames_presented() const { return frames_presented_; }
+  void log_scale_change() const { host::log("metal: internal resolution now %ux%u (EFB x%d)", EFB_WIDTH * scale_, EFB_HEIGHT * scale_, scale_); }
   void set_overlay(OverlayProvider provider) { overlay_ = std::move(provider); }
 
  private:
@@ -259,13 +262,16 @@ class MetalBackend final : public Backend {
   int pick_scale() const {
     constexpr int max_scale = 16384 / EFB_WIDTH;
     const int ssaa = std::clamp(opts_.ssaa, 1, 2);
-    if (opts_.efb_scale > 0) return std::clamp(opts_.efb_scale * ssaa, 1, max_scale);
+    int cap = max_scale;
+    if (const int d = g_device_scale_cap.load(std::memory_order_relaxed)) cap = std::min(cap, d);
+    if (const int t = g_thermal_scale_cap.load(std::memory_order_relaxed)) cap = std::min(cap, t);
+    if (opts_.efb_scale > 0) return std::clamp(std::min(opts_.efb_scale, cap) * ssaa, 1, max_scale);
     float ww = (float)std::max(client_w_, 1), wh = (float)std::max(client_h_, 1);
     float aspect = output_aspect();
     float vw = ww, vh = ww / aspect;
     if (vh > wh) { vh = wh; vw = wh * aspect; }
     int s = std::max((int)std::ceil(vw / (480.0f * aspect)), (int)std::ceil(vh / 480.0f));
-    return std::clamp(s * ssaa, 1, max_scale);
+    return std::clamp(std::min(s, cap) * ssaa, 1, max_scale);
   }
 
   void create_efb() {
@@ -906,7 +912,7 @@ class MetalBackend final : public Backend {
     static thread_local bool qos_set = false;
     if (!qos_set) { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0); qos_set = true; }   // render thread on performance cores
     @autoreleasepool {
-      if (opts_.efb_scale == 0 && pick_scale() != scale_) { wait_idle(); efb_copies_.clear(); create_efb(); }
+      if (pick_scale() != scale_) { wait_idle(); efb_copies_.clear(); create_efb(); log_scale_change(); }   // window, ProMotion, thermal or device caps
       { host::SimCostScope wait_cost(host::SIM_GPUWAIT); dispatch_semaphore_wait(frame_semaphore_, DISPATCH_TIME_FOREVER); }   // blocks only when FRAME_SLOTS command buffers are still executing
       ++frame_counter_;
       if (frame_counter_ % 120 == 1) refresh_period_ms_ = 1000.0 / std::max(host::window_refresh_rate(), 1.0);   // display can change (window moved, ProMotion)
@@ -1157,6 +1163,7 @@ Backend* create_metal_backend(void* layer, int w, int h, const MetalOptions& opt
   host::log("metal: rendering on its own thread; the simulation never waits for the display");
   return t;
 }
+void metal_scale_caps(int device_cap, int thermal_cap) { g_device_scale_cap.store(std::max(0, device_cap)); g_thermal_scale_cap.store(std::max(0, thermal_cap)); }
 void metal_resize(Backend* backend, int w, int h) { if (MetalThreaded* t = threaded(backend)) t->resize(w, h); else static_cast<MetalBackend*>(backend)->resize(w, h); }
 void metal_set_options(Backend* backend, const MetalOptions& options) { if (MetalThreaded* t = threaded(backend)) t->set_options(options); else static_cast<MetalBackend*>(backend)->set_options(options); }
 uint64_t metal_frames_presented(Backend* backend) { if (MetalThreaded* t = threaded(backend)) return t->frames_presented(); return static_cast<MetalBackend*>(backend)->frames_presented(); }

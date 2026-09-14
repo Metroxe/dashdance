@@ -167,6 +167,7 @@ void gcadapter_rumble(int port, bool on) {
   if (g_rumble[port] != v) { g_rumble[port] = v; g_rumble_dirty = true; }
 }
 
+bool gcadapter_status(GcAdapterStatus&) { return false; }
 void gcadapter_shutdown() { close_adapter(); }
 
 }  // namespace host

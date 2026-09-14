@@ -27,6 +27,10 @@ struct MetalOptions {
 Backend* create_metal_backend(void* layer, int w, int h, const MetalOptions& options);
 void metal_resize(Backend* backend, int w, int h);
 void metal_set_options(Backend* backend, const MetalOptions& options);
+// Caps on the internal-resolution multiplier, applied to both auto and explicit scales and re-evaluated
+// every frame: `device_cap` for the device class (phones: 2), `thermal_cap` from the thermal state
+// (serious: 2, critical: 1). 0 = no cap.
+void metal_scale_caps(int device_cap, int thermal_cap);
 uint64_t metal_frames_presented(Backend* backend);
 // Drawn over every presented frame (touch controls); the provider runs on the render thread.
 using OverlayProvider = std::function<bool(host::OverlayFrame&)>;

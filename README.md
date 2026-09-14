@@ -105,7 +105,15 @@ The app follows Apple's current design language. On macOS 26 and iOS 26 the dash
 | D-pad | T F G H |
 | Start | Return |
 
-Any controller SDL recognises works out of the box, over Bluetooth or a cable: PlayStation, Xbox, Switch Pro, MFi and most USB pads. On a Mac a WUP-028 GameCube adapter (the Nintendo Wii U / Switch one) is read directly over USB with the same 1 ms polling the real console uses and takes priority on the ports it has controllers plugged into. iPadOS and iOS do not expose raw USB devices to apps, so on those the adapter is not available; a Bluetooth or USB-C pad is the way to play with a physical controller there. Ports and button mappings are managed from the Controllers card on the dashboard.
+Any controller SDL recognises works out of the box, over Bluetooth or a cable: PlayStation, Xbox, Switch Pro, MFi and most USB pads. Ports and button mappings are managed from the Controllers card on the dashboard, which also shows each controller's measured report rate (move a stick for a second and it settles).
+
+### GameCube controllers and the adapter (macOS)
+
+This is how Slippi players connect a real GameCube controller everywhere: the Nintendo Wii U / Switch GameCube Controller Adapter (WUP-028), or a Mayflash 4-port adapter with its switch in "Wii U" mode, plugged into USB (a USB-C to USB-A adapter or hub on a modern Mac). The app reads it directly, the way Dolphin's native adapter mode does, and it takes priority on the ports that have controllers plugged in.
+
+The catch every competitive player knows: the adapter's USB descriptor asks for an 8 ms polling interval, 125 Hz, which adds up to 8 ms of input latency. On Linux the fix is a kernel module ([gcadapter-oc-kmod](https://github.com/HannesMann/gcadapter-oc-kmod)) that rewrites the interval to 1 ms; on Windows a WinUSB driver and a patched Dolphin; on macOS it used to need a kernel extension ([GCAdapterDriver](https://github.com/secretkeysio/GCAdapterDriver)) and, since Big Sur, [a Recovery-mode change to system security](https://github.com/project-slippi/Ishiiruka/wiki/Overclocking-Controllers-on-macOS-Big-Sur,-Monterey,-Ventura,-or-Sonoma). iSlippi does it in-process: it opens the adapter through IOKit and asks the USB host controller for a 1 ms interval with `SetPipePolicy`, no driver, no security change, no libusb. The dashboard shows the rate the port actually delivers, measured from the report stream; if it says 125 Hz, that USB port or hub refused the request and another one usually accepts it (the same advice the Slippi Mac FAQ gives). `MELEE_ADAPTER_INTERVAL_MS=2` asks for 500 Hz if an adapter drops inputs at 1000.
+
+iPadOS and iOS do not give apps raw USB access, so the adapter is a Mac feature; on an iPhone or iPad a Bluetooth or USB-C pad is the way to play with a physical controller.
 
 ### iPhone and iPad (your own device)
 
@@ -125,6 +133,12 @@ Prefer USB and your own certificate? `./setup.sh /path/to/melee.iso --device --t
 Apple Development identity Xcode created for your Apple ID and installs on the connected device
 (`--team <TEAMID>` to pick one; `--udid <id>` to pick the device). On the device turn on Settings › Privacy &
 Security › Developer Mode and trust your certificate under Settings › General › VPN & Device Management.
+
+### On iPhone
+
+iSlippi runs on iPhone the same way as on iPad, with two phone-specific rules. The internal resolution is capped at 2× (1280×1056) because a phone has the least thermal headroom, and when iOS reports serious or critical heat the game drops to 2× and then 1× automatically so the frame rate holds instead of the resolution (the change is logged, and the cap lifts when the phone cools). Pro models run the 120 Hz display path (`CADisableMinimumFrameDurationOnPhone`); other models present at 60 Hz.
+
+Controllers: iPhone 15 and later accept USB-C pads (PlayStation, Xbox, Switch Pro, MFi) through the GameController framework, and every model pairs them over Bluetooth. iOS decides the HID polling rate; the app cannot set 1000 Hz on a phone, but it measures what the connection delivers and shows it in the Controllers card, and it samples the latest state right before each game frame. A Lightning iPhone takes MFi controllers only. None of this has been measured on a physical phone yet, only in the Simulator, which runs on the Mac's GPU.
 
 ### On iPad, iPhone and Vision Pro
 
@@ -147,7 +161,7 @@ Slippi is competitive, so the app uses what Apple devices offer for latency:
 | **No throttling while playing** | A latency-critical `NSProcessInfo` activity on macOS (no timer coalescing, no App Nap, no display or system sleep) and a disabled idle timer on iOS; `GCSupportsGameMode` so Game Mode engages; thermal-state changes are logged next to the frame timings and shown on the dashboard. |
 | **Unified memory used properly** | Vertex, index and constant rings are shared, write-combined buffers (the CPU streams into them without polluting its cache); game textures live in private storage in the GPU's optimal layout, uploaded by blit from write-combined staging ahead of the frame. Guest RAM is prefaulted at boot; disc reads use a 1 MB buffer with kernel read-ahead. |
 | **Wi-Fi traffic class** | Netplay and matchmaking sockets use the voice service class, the lowest-latency Wi-Fi queue. |
-| **Controllers** | GameCube adapter (WUP-028) over USB on macOS, any Bluetooth or MFi pad with rumble, keyboard, and touch with haptics. Ports and mappings per controller. |
+| **Controllers** | GameCube adapter (WUP-028) over USB on macOS, polled at 1000 Hz through IOKit without a driver; any Bluetooth or MFi pad with rumble, keyboard, and touch with haptics. Ports and mappings per controller; measured report rates on the dashboard. |
 | **Input sampled at the last moment** | Controller and keyboard events are read right before the game's frame starts, after the frame sleep, not before it. A Bluetooth pad press no longer waits out the frame's slack (up to 12 ms) before the game sees it; the GameCube adapter already had its own 1 ms thread. |
 | **Audio kept short** | A 256-frame CoreAudio buffer plus a 20 ms ring: about 26 ms from the game producing a sound to the speaker, measured underrun-free. `MELEE_AUDIO_SLACK_MS` and `MELEE_AUDIO_FRAMES` adjust it; underruns are logged as they happen. |
 | **Internal resolution is the latency knob** | Measured in full screen on an M5 Pro: 1× costs 1.8 ms of GPU and 4 ms XFB-to-panel, 2× 2.6 ms and 4.6 ms, 4× 4.6 ms and about 7 ms. Anisotropic filtering is free. The competitive preset picks 2×. |
@@ -191,7 +205,7 @@ This is an alpha. Expect rough edges, and please report them.
 
 `./setup.sh` does all of the below. The manual steps, for people who want to see them:
 
-Requirements: Xcode Command Line Tools, Homebrew (`cmake ninja python libusb`), a checkout of [doldecomp/melee](https://github.com/doldecomp/melee) for the animation helpers, and your disc's `main.dol`.
+Requirements: Xcode Command Line Tools, Homebrew (`cmake ninja python`), a checkout of [doldecomp/melee](https://github.com/doldecomp/melee) for the animation helpers, and your disc's `main.dol`. (libusb is no longer needed: the GameCube adapter is read through IOKit.)
 
 ```bash
 git clone https://github.com/TheAndersMadsen/islippi.git

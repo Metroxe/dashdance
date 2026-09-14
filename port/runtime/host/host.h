@@ -141,6 +141,8 @@ struct PadState { uint16_t button; int8_t stick_x, stick_y, sub_x, sub_y; uint8_
 void input_poll(PadState out[4]);
 // GameCube controller adapter (WUP-028 over WinUSB): fills plugged ports, returns their mask.
 uint32_t gcadapter_poll(PadState out[4]);
+struct GcAdapterStatus { uint32_t ports = 0; int interval_ms = 0; double report_hz = 0.0; };   // ports: bit per plugged controller
+bool gcadapter_status(GcAdapterStatus& out);   // false when no adapter is open
 void gcadapter_rumble(int port, bool on);
 void gcadapter_shutdown();
 

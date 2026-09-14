@@ -18,7 +18,7 @@ There is no store or public-release distribution and there must not be: the buil
 translated game. `tools/release.sh` and `.github/workflows/release.yml` build DMG/IPA release assets for a
 private fork only (both refuse public repositories).
 
-The script installs Homebrew packages (cmake ninja python libusb), clones doldecomp/melee into
+The script installs Homebrew packages (cmake ninja python), clones doldecomp/melee into
 `deps/melee`, extracts `main.dol` from the disc (`tools/extract_dol.py`), fetches the pinned Aurora
 dependency, generates the port, builds, packages and opens the app. Nothing from the game is
 committed; the disc stays where it is.
@@ -30,7 +30,7 @@ committed; the disc stays where it is.
 | `port/app/main_mac.cpp` | The app entry point for all Apple platforms: options, launcher/dashboard, game loop start. |
 | `port/app/ios/`, `port/app/macos/` | Info.plist templates. |
 | `port/app/icons/AppIcon.icon` | Icon Composer bundle (Slippi mark as a glass layer). `tools/package_macos_app.sh` and CMake compile it with `actool`. |
-| `port/runtime/host/` | Host services: window + input (`window_sdl.cpp`), dashboards (`mac_launcher.mm`, `ios_launcher.mm`), controller mapping (`input_config.*`), dashboard model (`dashboard.*`), retrace/timing (`host.cpp`), touch overlay (`overlay.*`), GameCube adapter (`gc_adapter*.cpp`). |
+| `port/runtime/host/` | Host services: window + input (`window_sdl.cpp`), dashboards (`mac_launcher.mm`, `ios_launcher.mm`), controller mapping (`input_config.*`), dashboard model (`dashboard.*`), retrace/timing (`host.cpp`), touch overlay (`overlay.*`), GameCube adapter (`gc_adapter_iokit.cpp` on macOS: IOKit with a 1 ms pipe policy; `gc_adapter_libusb.cpp` elsewhere), controller report-rate measurement (`controller_rate.mm`). |
 | `port/runtime/gx/` | The GX (GameCube GPU) translation and the Metal renderer (`gx_metal.mm`, `gx_msl.cpp`). |
 | `port/runtime/hle/` | High-level emulation of the GameCube SDK the game calls (disc, pads, audio, memory cards) and Slippi's EXI device, login (`slippi_login.*`) and replay parsing (`slippi_history.*`). |
 | `port/runtime/ppc/` | Guest CPU context, memory, interpreter fallback. |
