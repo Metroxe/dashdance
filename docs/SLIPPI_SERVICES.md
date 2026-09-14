@@ -58,7 +58,8 @@ The existing Rust ownership implementation is at
 Its `Cargo.lock` and `Cargo.toml` pin `slippi-gg-api`, `slippi-user`, and
 `slippi-game-reporter` to Slippi Rust Extensions commit
 `2d29e794de8497582675fb70877851f2cdd2f256`. Reuse that implementation and its
-tests, retaining GPL-2.0-only provenance. It currently remains outside this
+tests, retaining its provenance. (That module labels its own adaptations GPL-2.0-only; Slippi Rust Extensions itself
+ships the GPLv2 text without stating a version, see `THIRD_PARTY_NOTICES.md`.) It currently remains outside this
 checkout; a reproducible native online target must import/pin that ownership
 source or require an explicit verified source-directory/library input.
 

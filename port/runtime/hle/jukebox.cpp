@@ -1,4 +1,5 @@
-// Port of Slippi's jukebox (Rust, hps_decode 0.3.0) onto the host audio mixer.
+// Port of Slippi's jukebox (slippi-rust-extensions, GPLv2 with no version stated; its HPS/DSP-ADPCM decoding comes from
+// hps_decode 0.3.0, MIT, Copyright (c) 2023 Daryl Pinto) onto the host audio mixer. See THIRD_PARTY_NOTICES.md.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "jukebox.h"
 #include "host.h"

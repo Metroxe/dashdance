@@ -1,6 +1,5 @@
 // Discord Rich Presence through the Discord desktop app's local IPC socket (macOS).
-// The same presence the Slippi project added to its Rust extensions (slippi-rust-extensions
-// PR 36), done natively and with that PR's Discord application and artwork: the application id is
+// The same presence proposed for Slippi's Rust extensions (slippi-rust-extensions PR 36, not merged), done natively and with that PR's Discord application and artwork: the application id is
 // built in, so there is nothing to set up and no login inside Dashdance. Menus, queue and opponent come
 // from matchmaking; stage, characters, live stocks and set score come from the replay event stream.
 // Nothing else is affected when Discord is not running.

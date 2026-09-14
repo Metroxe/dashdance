@@ -58,7 +58,7 @@ bool g_scripted = false;
 std::atomic<uint32_t> g_match_start{0};
 
 // Touch controls (iPhone, iPad, Apple Vision Pro). Layout and touch model follow
-// VirtualFriend's on-screen controller (Adam Gastineau, MIT): two side columns of
+// VirtualFriend's on-screen controller (Copyright (c) 2024 Adam Gastineau, MIT; notice in THIRD_PARTY_NOTICES.md): two side columns of
 // translucent monochrome shapes (trigger capsule, pad, two round buttons), every
 // finger is tested against every button on each touch event so presses slide
 // naturally between buttons. Adapted to a GameCube pad: analog stick on the left,
