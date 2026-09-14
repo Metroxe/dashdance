@@ -22,6 +22,9 @@ Frame g_frame;
 TextureSnapshotCache g_texture_snapshots;
 uint64_t g_frame_sequence = 0;
 std::vector<uint8_t> g_buf;
+size_t g_buf_pos = 0;      // parse cursor into g_buf (bytes before it are consumed)
+size_t g_need = 0;         // total bytes the command at the cursor still needs before it can be parsed (0 = unknown)
+uint32_t g_cp_version = 1; // bumped on every CP register write: invalidates the vertex-descriptor cache
 // Draw identity bookkeeping (reset per frame).
 uint32_t g_dl_addr = 0, g_dl_draw_ordinal = 0, g_dl_call_ordinal = 0;
 std::unordered_map<uint32_t, uint32_t> g_dl_calls;        // display list address -> calls this frame
@@ -51,7 +54,7 @@ struct VertexDesc {
 
 uint32_t comp_bytes(uint32_t format) { static const uint32_t b[] = {1, 1, 2, 2, 4, 4, 4, 4}; return b[format & 7]; }
 
-VertexDesc build_desc(uint32_t fmt) {
+VertexDesc build_desc_uncached(uint32_t fmt) {
   VertexDesc d{};
   uint32_t lo = g_cp.vcd_lo(), hi = g_cp.vcd_hi();
   uint32_t a = g_cp.vat_a(fmt), b = g_cp.vat_b(fmt), c = g_cp.vat_c(fmt);
@@ -86,6 +89,16 @@ VertexDesc build_desc(uint32_t fmt) {
   d.size = size;
   return d;
 }
+// The descriptor for a vertex format only changes when a CP register does, so it is built once per
+// CP state instead of once per FIFO write (the game streams a draw's vertices 4 bytes at a time, and
+// the parser has to know the draw's length for every one of those writes).
+const VertexDesc& build_desc(uint32_t fmt) {
+  static VertexDesc cache[8];
+  static uint32_t cache_version[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  fmt &= 7;
+  if (cache_version[fmt] != g_cp_version) { cache[fmt] = build_desc_uncached(fmt); cache_version[fmt] = g_cp_version; }
+  return cache[fmt];
+}
 
 float read_component(const uint8_t* p, uint32_t format, uint32_t frac) {
   switch (format) {
@@ -115,64 +128,106 @@ const uint8_t* array_ptr(uint32_t array, uint32_t index) {
 }
 
 // Decodes `count` vertices of format `fmt` from `src` into the frame. Returns components mask.
+// Per-draw decode plan: everything that is constant for a draw (formats, component sizes, fixed-point
+// scales, indexed-array bases and strides, the matrix-index defaults) is resolved once here, so the
+// per-vertex loop is straight-line loads. The arithmetic is exactly read_component's: an integer
+// converted to float and multiplied by the same power-of-two scale, or the raw IEEE float.
+namespace {
+struct AttrPlan {
+  uint32_t type = 0;       // 0 none, 1 direct, 2 index8, 3 index16
+  uint32_t format = 0, cb = 0, n = 0, direct_size = 0;
+  float scale = 1.0f;
+  uint32_t array_base = 0, stride = 0;   // indexed arrays (guest addresses, resolved per index like array_ptr)
+  inline const uint8_t* fetch(const uint8_t*& p) const {
+    if (type == 1) { const uint8_t* q = p; p += direct_size; return q; }
+    uint32_t index; if (type == 2) { index = *p; p += 1; } else { index = be16(p); p += 2; }
+    return indexed(index);
+  }
+  inline const uint8_t* indexed(uint32_t index) const {
+    return host::ptr(0x80000000u | ((array_base + stride * index) & 0x01FFFFFFu));
+  }
+  inline float component(const uint8_t* q, uint32_t k) const {
+    const uint8_t* c = q + k * cb;
+    switch (format) {
+      case 0: return (float)c[0] * scale;
+      case 1: return (float)(int8_t)c[0] * scale;
+      case 2: return (float)(uint16_t)be16(c) * scale;
+      case 3: return (float)(int16_t)be16(c) * scale;
+      default: { uint32_t u = be32(c); float f; std::memcpy(&f, &u, 4); return f; }
+    }
+  }
+};
+void plan_set(AttrPlan& a, const AttrDesc& x, uint32_t n) {
+  a.type = x.type; a.format = x.format; a.cb = comp_bytes(x.format); a.n = n; a.direct_size = a.cb * n;
+  a.scale = std::ldexp(1.0f, -(int)x.frac);
+  if (a.type == 2 || a.type == 3) { a.array_base = g_cp.array_base(x.array); a.stride = g_cp.array_stride(x.array); }
+}
+}  // namespace
+
 uint32_t decode_vertices(const VertexDesc& d, const uint8_t* src, uint32_t count, uint32_t fmt) {
   uint32_t components = 0;
-  uint32_t mia = g_cp.matrix_index_a(), mib = g_cp.matrix_index_b();
+  const uint32_t mia = g_cp.matrix_index_a(), mib = g_cp.matrix_index_b();
+  // ---- plan
+  uint8_t texmtx_default[8];
+  for (int i = 0; i < 8; ++i) texmtx_default[i] = (uint8_t)(i < 4 ? bits(mia, 6 + 6 * i, 6) : bits(mib, 6 * (i - 4), 6));
+  const uint8_t posmtx_default = (uint8_t)(mia & 63);
+  if (d.posmtx) components |= VB_HAS_POSMTXIDX;
+  for (int i = 0; i < 8; ++i) if (d.texmtx[i]) components |= VB_HAS_TEXMTXIDX0 << i;
+  AttrPlan pos; plan_set(pos, d.pos, d.pos.count ? 3 : 2);
+  AttrPlan nrm; uint32_t nrm_index_bytes = 0, nrm_direct_bytes = 0;
+  if (d.nrm.type) {
+    const uint32_t frac = d.nrm.format == 1 ? 6 : d.nrm.format == 3 ? 14 : d.nrm.format == 0 ? 7 : d.nrm.format == 2 ? 15 : 0;
+    AttrDesc nd = d.nrm; nd.frac = frac;
+    plan_set(nrm, nd, 3);
+    const uint32_t nvec = d.nrm.count ? 3 : 1;
+    if (nvec > 1) components |= VB_UNCAPTURED_NBT;
+    nrm_direct_bytes = nrm.cb * 3 * nvec;
+    nrm_index_bytes = d.nrm.type == 2 ? ((d.nrm.count && d.nrm_index3) ? 3 : 1) : ((d.nrm.count && d.nrm_index3) ? 6 : 2);
+    components |= VB_HAS_NRM0;
+  }
+  static const uint32_t csize[] = {2, 3, 4, 2, 3, 4, 4, 4};
+  AttrPlan col[2];
+  for (int i = 0; i < 2; ++i) {
+    if (!d.col[i].type) continue;
+    plan_set(col[i], d.col[i], 1); col[i].direct_size = csize[d.col[i].format];
+    components |= i ? VB_HAS_COL1 : VB_HAS_COL0;
+  }
+  AttrPlan tex[8];
+  for (int i = 0; i < 8; ++i) {
+    if (!d.tex[i].type) continue;
+    plan_set(tex[i], d.tex[i], d.tex[i].count ? 2 : 1);
+    components |= VB_HAS_UV0 << i;
+  }
+  // ---- vertices, written in place (resize value-initialises, matching the old zeroed `Vertex out{}`)
+  const size_t first = g_frame.vertices.size();
+  g_frame.vertices.resize(first + count);
+  Vertex* outv = g_frame.vertices.data() + first;
   for (uint32_t v = 0; v < count; ++v) {
-    Vertex out{};
+    Vertex& out = outv[v];
     const uint8_t* p = src + (size_t)v * d.size;
-    // matrix indices
-    if (d.posmtx) { out.posmtx = *p++; components |= VB_HAS_POSMTXIDX; }
-    else out.posmtx = (uint8_t)(mia & 63);
-    for (int i = 0; i < 8; ++i) {
-      if (d.texmtx[i]) { out.texmtx[i] = *p++; components |= VB_HAS_TEXMTXIDX0 << i; }
-      else out.texmtx[i] = (uint8_t)(i < 4 ? bits(mia, 6 + 6 * i, 6) : bits(mib, 6 * (i - 4), 6));
-    }
-    auto fetch = [&](const AttrDesc& x, uint32_t direct_size) -> const uint8_t* {
-      const uint8_t* q = nullptr;
-      if (x.type == 1) { q = p; p += direct_size; }
-      else if (x.type == 2) { q = array_ptr(x.array, *p); p += 1; }
-      else if (x.type == 3) { q = array_ptr(x.array, be16(p)); p += 2; }
-      return q;
-    };
-    // position
-    {
-      uint32_t n = d.pos.count ? 3 : 2, cb = comp_bytes(d.pos.format);
-      const uint8_t* q = fetch(d.pos, cb * n);
-      if (q) for (uint32_t k = 0; k < n; ++k) out.pos[k] = read_component(q + k * cb, d.pos.format, d.pos.frac);
-    }
-    // normal (first vector only; binormal/tangent ignored for now)
+    out.posmtx = d.posmtx ? *p++ : posmtx_default;
+    for (int i = 0; i < 8; ++i) out.texmtx[i] = d.texmtx[i] ? *p++ : texmtx_default[i];
+    if (const uint8_t* q = pos.fetch(p)) for (uint32_t k = 0; k < pos.n; ++k) out.pos[k] = pos.component(q, k);
     if (d.nrm.type) {
-      uint32_t cb = comp_bytes(d.nrm.format), frac = d.nrm.format == 1 ? 6 : d.nrm.format == 3 ? 14 : d.nrm.format == 0 ? 7 : d.nrm.format == 2 ? 15 : 0;
-      uint32_t nvec = d.nrm.count ? 3 : 1;
-      if (nvec > 1) components |= VB_UNCAPTURED_NBT;
-      const uint8_t* q = nullptr;
-      if (d.nrm.type == 1) { q = p; p += cb * 3 * nvec; }
-      else if (d.nrm.type == 2) { q = array_ptr(1, *p); p += (d.nrm.count && d.nrm_index3) ? 3 : 1; }
-      else { q = array_ptr(1, be16(p)); p += (d.nrm.count && d.nrm_index3) ? 6 : 2; }
-      if (q) for (int k = 0; k < 3; ++k) out.nrm[k] = read_component(q + k * cb, d.nrm.format, frac);
-      components |= VB_HAS_NRM0;
+      const uint8_t* q;
+      if (d.nrm.type == 1) { q = p; p += nrm_direct_bytes; }
+      else if (d.nrm.type == 2) { q = nrm.indexed(*p); p += nrm_index_bytes; }
+      else { q = nrm.indexed(be16(p)); p += nrm_index_bytes; }
+      if (q) for (int k = 0; k < 3; ++k) out.nrm[k] = nrm.component(q, k);
     }
-    // colors
-    static const uint32_t csize[] = {2, 3, 4, 2, 3, 4, 4, 4};
     for (int i = 0; i < 2; ++i) {
-      if (!d.col[i].type) { continue; }
-      const uint8_t* q = fetch(d.col[i], csize[d.col[i].format]);
+      if (!d.col[i].type) continue;
+      const uint8_t* q = col[i].fetch(p);
       uint8_t* dst = i ? out.col1 : out.col0;
       if (q) read_color(q, d.col[i].format, dst);
       if (!d.col[i].count) dst[3] = 255;
-      components |= i ? VB_HAS_COL1 : VB_HAS_COL0;
     }
-    // texcoords
     for (int i = 0; i < 8; ++i) {
       if (!d.tex[i].type) continue;
-      uint32_t n = d.tex[i].count ? 2 : 1, cb = comp_bytes(d.tex[i].format);
-      const uint8_t* q = fetch(d.tex[i], cb * n);
-      if (q) for (uint32_t k = 0; k < n; ++k) out.uv[i][k] = read_component(q + k * cb, d.tex[i].format, d.tex[i].frac);
-      components |= VB_HAS_UV0 << i;
+      if (const uint8_t* q = tex[i].fetch(p)) for (uint32_t k = 0; k < tex[i].n; ++k) out.uv[i][k] = tex[i].component(q, k);
     }
-    g_frame.vertices.push_back(out);
   }
+  (void)fmt;
   return components;
 }
 
@@ -375,36 +430,38 @@ void run_display_list(uint32_t addr, uint32_t size) {
   g_dl_addr = saved_addr; g_dl_draw_ordinal = saved_draw; g_dl_call_ordinal = saved_call;
 }
 
+// Parses one command at `d`; returns its length, or 0 when `len` is short (g_need then holds the
+// total length the command will have, so the FIFO writer can skip parsing until it has arrived).
 size_t parse_command(const uint8_t* d, size_t len) {
   uint8_t op = d[0];
   if (op == 0x00) return 1;
-  if (op == 0x08) { if (len < 6) return 0; g_cp.reg[d[1]] = be32(d + 2); return 6; }
+  if (op == 0x08) { if (len < 6) { g_need = 6; return 0; } g_cp.reg[d[1]] = be32(d + 2); ++g_cp_version; return 6; }
   if (op == 0x10) {
-    if (len < 5) return 0;
+    if (len < 5) { g_need = 5; return 0; }
     uint32_t count = (be16(d + 1) & 0xF) + 1, address = be16(d + 3);
     size_t need = 5 + count * 4;
-    if (len < need) return 0;
+    if (len < need) { g_need = need; return 0; }
     xf_load(address, count, d + 5);
     return need;
   }
   if (op == 0x20 || op == 0x28 || op == 0x30 || op == 0x38) {
-    if (len < 5) return 0;
+    if (len < 5) { g_need = 5; return 0; }
     xf_indexed_load(op, be32(d + 1));
     return 5;
   }
   if (op == 0x40) {
-    if (len < 9) return 0;
+    if (len < 9) { g_need = 9; return 0; }
     run_display_list(be32(d + 1), be32(d + 5));
     return 9;
   }
   if (op == 0x48) return 1;
-  if (op == 0x61) { if (len < 5) return 0; bp_write(be32(d + 1)); return 5; }
+  if (op == 0x61) { if (len < 5) { g_need = 5; return 0; } bp_write(be32(d + 1)); return 5; }
   if (op >= 0x80 && op < 0xC0) {
-    if (len < 3) return 0;
+    if (len < 3) { g_need = 3; return 0; }
     uint32_t fmt = op & 7, count = be16(d + 1);
-    VertexDesc desc = build_desc(fmt);
+    const VertexDesc& desc = build_desc(fmt);
     size_t need = 3 + (size_t)count * desc.size;
-    if (len < need) return 0;
+    if (len < need) { g_need = need; return 0; }
     if (count) {
       uint32_t first = (uint32_t)g_frame.vertices.size();
       uint32_t components = decode_vertices(desc, d + 3, count, fmt);
@@ -426,18 +483,21 @@ void init(Backend* backend) {
   std::memset(&g_xf, 0, sizeof g_xf);
   std::memset(g_tmem, 0, sizeof g_tmem);
   g_frame.clear();
+  g_buf.clear(); g_buf_pos = 0; g_need = 0; ++g_cp_version;
 }
 
 void write_fifo(uint32_t value, int bytes) {
   for (int i = bytes - 1; i >= 0; --i) g_buf.push_back((uint8_t)(value >> (8 * i)));
-  size_t pos = 0;
-  while (pos < g_buf.size()) {
-    size_t n = parse_command(g_buf.data() + pos, g_buf.size() - pos);
+  if (g_buf.size() - g_buf_pos < g_need) return;   // inside a draw whose vertices are still streaming in
+  g_need = 0;
+  while (g_buf_pos < g_buf.size()) {
+    size_t n = parse_command(g_buf.data() + g_buf_pos, g_buf.size() - g_buf_pos);
     if (!n) break;
-    pos += n;
+    g_buf_pos += n;
     ++g_commands;
   }
-  if (pos) g_buf.erase(g_buf.begin(), g_buf.begin() + pos);
+  if (g_buf_pos == g_buf.size()) { g_buf.clear(); g_buf_pos = 0; }
+  else if (g_buf_pos >= (256u << 10)) { g_buf.erase(g_buf.begin(), g_buf.begin() + g_buf_pos); g_buf_pos = 0; }
 }
 
 void stats(uint64_t* commands, uint64_t* draws, uint64_t* vertices, uint32_t* efb_copies) {

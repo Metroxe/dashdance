@@ -574,7 +574,6 @@ void retrace() {
   }
   slippi::poll_options();
   advance_frame();
-  if (g_has_window) { SimCostScope pump(SIM_PUMP); window_pump(); }
   if (!options.fast) {
     g_next_frame += std::chrono::microseconds((long long)(16667.0 / g_emulation_speed + phase_lock_shift_ms() * 1000.0));
     auto now = std::chrono::steady_clock::now();
@@ -584,6 +583,11 @@ void retrace() {
   } else {
     g_frame_time = now_seconds();
   }
+  // Late input sampling: pump the window and controller events *after* the frame sleep, right before
+  // the VI interrupt that makes the game read its pads. Pumping before the sleep left every keyboard
+  // and Bluetooth-pad press up to a frame's worth of slack (about 12 ms here) stale by the time the
+  // game saw it. The GameCube adapter has its own 1 ms reader thread and is unaffected.
+  if (g_has_window) { SimCostScope pump(SIM_PUMP); window_pump(); }
   g_sim_frame_start = now_seconds();
   fire_due_alarms(true);
   hle::audio_tick(true);

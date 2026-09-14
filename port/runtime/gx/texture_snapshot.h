@@ -43,9 +43,14 @@ public:
     // Most draws reuse their source. Vectorized memcmp avoids rehashing
     // every byte with a serial hash recurrence; changes still receive a new copy.
     auto previous = last_source.find(image);
-    if (previous != last_source.end() && equal(*previous->second.snapshot, image, image_size, palette, palette_size)) {
-      previous->second.used = generation;
-      return previous->second.snapshot;
+    if (previous != last_source.end()) {
+      // Verified once per simulation frame: the same texture is drawn many times a frame (fonts, HUD,
+      // stage tiles) and comparing its bytes on every draw was the largest remaining host cost per draw.
+      if (previous->second.used == generation) return previous->second.snapshot;
+      if (equal(*previous->second.snapshot, image, image_size, palette, palette_size)) {
+        previous->second.used = generation;
+        return previous->second.snapshot;
+      }
     }
     uint64_t hash = hash_bytes(image, image_size) ^ (hash_bytes(palette, palette_size) * 31);
     auto range = entries.equal_range(hash);

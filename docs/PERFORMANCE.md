@@ -39,3 +39,41 @@ up-left 2 s = Icicle Mountain, up-left 0.3 s = Random. Pressing A picks the last
 
 Results after the fixes: seven stages, 60 s of play each, zero late frames on six (worst frame
 7–10 ms); Flat Zone still shows a few, under investigation.
+
+## GPU experiments (M5 Pro, full screen 3024×1898, Onett, 60 s of play)
+
+| Setting | GPU per frame | XFB-to-panel latency |
+|---|---|---|
+| 1× internal (640×528) | 1.8 ms | 4.1 ms |
+| 2× internal (1280×1056) | 2.6 ms | 4.6 ms |
+| 4× internal (2560×2112), precise shader math | 6.2 ms | 11.4 ms |
+| 4×, anisotropic filtering off | 6.2 ms | (no change: anisotropy is free) |
+| 4×, shader fast math | 4.6 ms | 6.7 ms |
+
+GPU cost scales with pixels: the TEV pixel shaders are ALU-bound (they emulate the GameCube's 8-bit
+integer combiners exactly, so half precision is not an option). Fast math changes only the float
+texture-coordinate and fog paths and produced pixel-identical captures on deterministic boot frames, so
+it is on by default (`MELEE_METAL_FASTMATH=0` turns it off). The competitive preset picks 2×: the
+lowest latency that still looks crisp on a laptop panel. Latency follows GPU time almost one to one
+in full screen, so internal resolution is the single biggest latency knob a player has.
+
+Simulation side: the GX vertex decoder builds a per-draw plan (formats, fixed-point scales, array
+bases) once and writes vertices in place; its output is byte-identical to the previous decoder.
+
+## Simulation-thread work (M5 Pro, Onett, 12 s `sample` of the game thread)
+
+| Change | Effect |
+|---|---|
+| Vertex decoder builds a per-draw plan once (formats, scales, array bases) instead of re-deriving them per component | decode time roughly halved; output byte-identical |
+| FIFO parser keeps a read cursor and the pending command's length, and caches the vertex descriptor per CP state | the game streams vertices 4 bytes at a time and the parser used to rebuild the descriptor for every write; parser samples down 40% |
+| Texture bytes compared once per texture per frame instead of on every draw | the per-draw `memcmp` left the profile entirely |
+| Input events pumped after the frame sleep, right before the VI interrupt | keyboard and Bluetooth-pad presses used to wait up to a frame's slack (about 12 ms) before the game read them; now they are sampled at the last moment |
+| Audio: 256-frame CoreAudio buffer plus a 20 ms ring | 26 ms of queued audio, down from about 30; 12 ms starved several times a second and was rejected |
+
+All of it was checked against deterministic boot captures (pixel-identical) and 60 s matches (zero
+late frames).
+
+Negative result: `-mcpu=apple-m1` plus ThinLTO for the whole binary produced no gain above run-to-run
+noise on a 4000-frame unpaced boot or a 60 s match, and a 27% larger executable. The build stays
+plain `-O3`. The translated game is dominated by loads and stores through the guest-memory helpers,
+which are already inlined; there is no cross-module inlining left for LTO to find.

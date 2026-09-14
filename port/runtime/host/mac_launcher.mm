@@ -633,7 +633,7 @@ API_AVAILABLE(macos(26.0))
   [s addArrangedSubview:[self row:@"Slippi Online services" symbol:@"network" control:self.onlineSwitch]];
   NSStackView* presetRow = [[NSStackView alloc] init]; presetRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; presetRow.spacing = 10; presetRow.alignment = NSLayoutAttributeCenterY;
   [presetRow addArrangedSubview:[self button:@"Competitive preset" symbol:@"bolt.fill" action:@selector(applyCompetitivePreset)]];
-  [presetRow addArrangedSubview:label(@"Full screen, auto resolution, 16× filtering, display sync, 4:3, no sharpening: the tournament setup.", 11, NSFontWeightRegular, 0.6)];
+  [presetRow addArrangedSubview:label(@"Full screen, 2× resolution (lowest latency that still looks crisp), 16× filtering, display sync, 4:3, no sharpening.", 11, NSFontWeightRegular, 0.6)];
   [s addArrangedSubview:presetRow];
   return card;
 }
@@ -875,7 +875,7 @@ API_AVAILABLE(macos(26.0))
   [self acceptDroppedDisc:[NSString stringWithUTF8String:panel.URL.fileSystemRepresentation]];
 }
 - (void)applyCompetitivePreset {
-  self.scaleControl.selectedSegment = 0; self.anisoControl.selectedSegment = 2;
+  self.scaleControl.selectedSegment = 2; self.anisoControl.selectedSegment = 2;   // 2x: the lowest-latency resolution that still looks crisp
   self.vsyncSwitch.state = NSControlStateValueOn; self.fullscreenSwitch.state = NSControlStateValueOn; self.widescreenSwitch.state = NSControlStateValueOff;
   self.sharpness.doubleValue = 0; [self sliderChanged:self.sharpness];
 }

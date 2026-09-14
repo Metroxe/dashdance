@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 #include <mutex>
@@ -92,7 +93,10 @@ void render(int16_t* out, uint32_t want) {
     while (g_ring_phase >= 1.0) { g_ring_phase -= 1.0; ++read; }
   }
   g_ring_read.store(read, std::memory_order_release);
-  if (starved) { g_underruns.fetch_add(1); g_underrun_frames.fetch_add(starved); }
+  if (starved) {
+    const uint64_t n = g_underruns.fetch_add(1) + 1; g_underrun_frames.fetch_add(starved);
+    if (n <= 5 || (n % 100) == 0) log("audio: underrun %llu (%u frames of silence); raise MELEE_AUDIO_SLACK_MS if this repeats", (unsigned long long)n, starved);
+  }
   if (volume > 0) slippi::jukebox::mix(out, want);
 }
 
@@ -107,6 +111,11 @@ void SDLCALL stream_callback(void*, SDL_AudioStream* stream, int additional_amou
   SDL_PutAudioStreamData(stream, scratch.data(), int(want * 4));
 }
 
+// Game-side slack in the ring on top of the device buffer. The game delivers audio once per 60 Hz
+// frame, so the ring must hold at least one frame (16.7 ms) plus scheduling jitter: 20 ms measured
+// underrun-free; 12 ms starved several times a second. MELEE_AUDIO_SLACK_MS overrides. Underruns are
+// logged as they happen.
+int ring_slack_ms() { const char* e = std::getenv("MELEE_AUDIO_SLACK_MS"); int v = e ? std::atoi(e) : 20; return std::clamp(v, 4, 200); }
 bool device_open() {
   if (!SDL_WasInit(SDL_INIT_AUDIO)) {
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) { log("audio: SDL audio init failed: %s", SDL_GetError()); return false; }
@@ -116,6 +125,11 @@ bool device_open() {
   spec.format = SDL_AUDIO_S16;
   spec.channels = 2;
   spec.freq = SAMPLE_RATE;
+  // A small CoreAudio buffer: the render callback runs on a real-time audio thread and our ring adds
+  // its own slack, so the device buffer only needs to cover one callback period. MELEE_AUDIO_FRAMES
+  // overrides (default 256 frames, about 5 ms at 48 kHz).
+  const char* frames = std::getenv("MELEE_AUDIO_FRAMES");
+  SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, frames && *frames ? frames : "256");
   g_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, stream_callback, nullptr);
   if (!g_stream) { log("audio: cannot open default playback device: %s", SDL_GetError()); return false; }
   // Aim for the same ~35-55 ms of queued audio the WASAPI path uses; the device
@@ -123,8 +137,9 @@ bool device_open() {
   int device_frames = 0;
   SDL_AudioSpec device_spec{};
   if (SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(g_stream), &device_spec, &device_frames) && device_frames > 0)
-    g_target_frames = size_t(device_frames) * SAMPLE_RATE / std::max(device_spec.freq, 1) + SAMPLE_RATE * 17 / 1000;
+    g_target_frames = size_t(device_frames) * SAMPLE_RATE / std::max(device_spec.freq, 1) + SAMPLE_RATE * ring_slack_ms() / 1000;
   if (g_target_frames > RING_FRAMES / 2) g_target_frames = RING_FRAMES / 2;
+  log("audio: device buffer %d frames at %d Hz, ring target %zu frames (%.0f ms of queued audio)", device_frames, device_spec.freq, g_target_frames, g_target_frames * 1000.0 / SAMPLE_RATE);
   g_priming = true;
   g_fill_average = 0.0;
   g_ring_phase = 0.0;

@@ -678,7 +678,7 @@ int display_max_hz() {
   UIButton* preset = [self button:@"Competitive preset" symbol:@"bolt.fill" prominent:NO];
   [preset addTarget:self action:@selector(applyCompetitivePreset) forControlEvents:UIControlEventTouchUpInside];
   UIStackView* presetRow = [[UIStackView alloc] init]; presetRow.axis = UILayoutConstraintAxisHorizontal; presetRow.spacing = 12; presetRow.alignment = UIStackViewAlignmentCenter;
-  [presetRow addArrangedSubview:preset]; [presetRow addArrangedSubview:[self label:@"Auto resolution, 16× filtering, display sync on, 4:3, no sharpening: the tournament setup." size:12 weight:UIFontWeightRegular alpha:0.6]];
+  [presetRow addArrangedSubview:preset]; [presetRow addArrangedSubview:[self label:@"2× resolution (lowest latency that still looks crisp), 16× filtering, display sync on, 4:3, no sharpening." size:12 weight:UIFontWeightRegular alpha:0.6]];
   [s addArrangedSubview:presetRow];
   return card;
 }
@@ -906,7 +906,7 @@ int display_max_hz() {
 }
 - (void)applyCompetitivePreset {
   haptic_impact();
-  [self.scaleControl setSelectedSegmentIndex:0]; [self.anisoControl setSelectedSegmentIndex:2];
+  [self.scaleControl setSelectedSegmentIndex:2]; [self.anisoControl setSelectedSegmentIndex:2];   // 2x: the lowest-latency resolution that still looks crisp
   [self.vsyncSwitch setOn:YES animated:YES]; [self.widescreenSwitch setOn:NO animated:YES];
   [self.sharpnessSlider setValue:0 animated:YES]; [self.sharpnessSlider sendActionsForControlEvents:UIControlEventValueChanged];
 }
