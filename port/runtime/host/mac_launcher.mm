@@ -1139,7 +1139,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
 // What in this setup costs latency, checked about once a second (display, full screen, network, controller, delay).
 - (void)refreshReadiness {
   if (!self.readinessStack) return;
-  const int delay = self.delayControl ? (int)self.delayControl.selectedSegment + 1 : self.settings->online_delay;
+  const int delay = self.delayControl ? [self selectedDelay] : self.settings->online_delay;
   const bool fullscreen = self.fullscreenSwitch ? self.fullscreenSwitch.state == NSControlStateValueOn : self.settings->fullscreen;
   const std::vector<host::ReadinessItem> items = host::competitive_readiness(self.settings->display_hz, fullscreen, delay);
   std::string sig;
@@ -1181,7 +1181,9 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   [s addArrangedSubview:[self sliderRow:@"Sharpen" symbol:@"sparkles" slider:self.sharpness format:@"%.0f%%" scale:100]];
   self.onlineSwitch = [self toggle:self.settings->online];
   [s addArrangedSubview:[self row:@"Slippi Online services" symbol:@"network" control:self.onlineSwitch]];
-  self.delayControl = [self segments:@[@"1", @"2", @"3", @"4"] selected:MAX(0, MIN(3, self.settings->online_delay - 1))];
+  NSMutableArray<NSString*>* delays = [@[@"1", @"2", @"3", @"4"] mutableCopy];   // plus the exact value when a larger one was set in the in-game menu
+  if (self.settings->online_delay > 4) [delays addObject:[NSString stringWithFormat:@"%d", self.settings->online_delay]];
+  self.delayControl = [self segments:delays selected:self.settings->online_delay > 4 ? 4 : MAX(0, self.settings->online_delay - 1)];
   [s addArrangedSubview:[self row:@"Online input delay (frames)" symbol:@"timer" control:self.delayControl]];
   [s addArrangedSubview:label(@"Each frame of delay adds 16.7 ms. 1 is the lowest latency on a stable, nearby connection; 2 is Slippi's default and rolls back less on Wi-Fi.", 11, NSFontWeightRegular, 0.6)];
   NSStackView* presetRow = [[NSStackView alloc] init]; presetRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; presetRow.spacing = 10; presetRow.alignment = NSLayoutAttributeCenterY;
@@ -1457,7 +1459,15 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   self.vsyncSwitch.state = NSControlStateValueOn; self.fullscreenSwitch.state = NSControlStateValueOn; self.widescreenSwitch.state = NSControlStateValueOff;
   self.sharpness.doubleValue = 0; [self sliderChanged:self.sharpness];
 }
+// The online delay the dashboard shows: 1-4, or the exact larger value set in the in-game menu (the fifth segment).
+- (int)selectedDelay {
+  const NSInteger i = self.delayControl.selectedSegment;
+  return i >= 4 ? MAX(5, self.settings->online_delay) : (int)MAX(0, i) + 1;
+}
 - (void)play {
+  // A Configure or Connect sheet must not keep its timers, key capture and controller discovery running into the match
+  // (Play from the menu bar works while a sheet is open).
+  if (self.editor) { [self.editor close]; self.editor = nil; }
   self.settings->discord_enabled = self.discordSwitch.state == NSControlStateValueOn;
   self.settings->discord_show_rank = self.discordRankSwitch.state == NSControlStateValueOn;
   const int scales[] = {0, 1, 2, 3, 4, 6, 8};
@@ -1467,7 +1477,7 @@ static NSButton* pairing_button(NSString* title, NSString* sym, id target, SEL a
   self.settings->fullscreen = self.fullscreenSwitch.state == NSControlStateValueOn;
   self.settings->widescreen = self.widescreenSwitch.state == NSControlStateValueOn;
   self.settings->online = self.onlineSwitch.state == NSControlStateValueOn;
-  if (self.settings->online_delay <= 4 || self.delayControl.selectedSegment != 3) self.settings->online_delay = (int)self.delayControl.selectedSegment + 1;   // keeps a larger value set by hand
+  if (self.delayControl) self.settings->online_delay = [self selectedDelay];
   self.settings->sharpness = (float)self.sharpness.doubleValue;
   [NSApp stopModalWithCode:NSModalResponseOK];
 }

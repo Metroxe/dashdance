@@ -127,14 +127,20 @@ case "$TARGET" in
         -DMELEE_APPLE_TEAM="$TEAM" -DMELEE_IOS_BUNDLE_ID="$BID" -DMELEE_ARTIFACT_VERIFY=OFF \
         -DMELEE_DECOMP_ROOT="$DECOMP" -DMELEE_DOL_PATH="$DOL" -DMELEE_PORT_GENERATED_DIR="$BUILD/generated/guest" \
         -DMELEE_BUILD_PORT_TESTS=OFF -DMELEE_BUILD_PORT_HEADLESS=OFF -DMELEE_BUILD_PORT_METAL=ON >/dev/null
-      xcodebuild -project "$BUILD"/*.xcodeproj -target melee_port_mac -configuration Release -sdk iphoneos -allowProvisioningUpdates -quiet build
+      XLOG="$BUILD/xcodebuild.log"
+      if ! xcodebuild -project "$BUILD"/*.xcodeproj -target melee_port_mac -configuration Release -sdk iphoneos -allowProvisioningUpdates -quiet build 2>&1 | tee "$XLOG"; [[ ${pipestatus[1]} -eq 0 ]] || false; then
+        if grep -q "No Account for Team\|No profiles for" "$XLOG"; then
+          fail "Xcode has your signing certificate but no Apple ID signed in, so it cannot make a provisioning profile. Open Xcode › Settings › Accounts, sign in with your Apple ID, connect and unlock your device, then run this again. Or run without --team to build dist/iSlippi.ipa for AltStore, SideStore or Sideloadly."
+        fi
+        fail "the signed device build failed; the full Xcode log is in $XLOG"
+      fi
       APP="$(find "$BUILD" -maxdepth 4 -name iSlippi.app -path '*Release-iphoneos*' | head -1)"
       [[ -d "$APP" ]] || fail "the signed app did not appear under $BUILD"
       # The Xcode generator writes CMake's post-build resources (Slippi Sys, the mark, the compiled icon) next to a
       # literal 'Release${EFFECTIVE_PLATFORM_NAME}' folder; move them into the app and sign again with the same identity.
       STRAY="$(dirname "$APP")/../Release\${EFFECTIVE_PLATFORM_NAME}/iSlippi.app"
       if [[ -d "$STRAY" ]]; then cp -R "$STRAY"/. "$APP"/; else
-        cp -R "$ROOT/port/slippi_sys" "$APP/slippi_sys"; cp "$ROOT/port/app/icons/AppIcon.icon/Assets/glyph.png" "$APP/SlippiMark.png"; fi
+        cp -R "$ROOT/port/slippi_sys" "$APP/slippi_sys"; cp "$ROOT/port/app/icons/AppIcon.icon/Assets/glyph.png" "$APP/SlippiMark.png"; cp -R "$ROOT/port/app/art/controller" "$APP/controller"; fi
       IDENTITY="$(codesign -dvv "$APP" 2>&1 | sed -n 's/^Authority=\(Apple Development: [^,]*\)$/\1/p' | head -1)"
       ENT="$(mktemp).plist"; codesign -d --entitlements - --xml "$APP" > "$ENT" 2>/dev/null
       codesign --force --sign "$IDENTITY" --entitlements "$ENT" --timestamp=none "$APP"

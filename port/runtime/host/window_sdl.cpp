@@ -452,9 +452,14 @@ GameRect window_game_rect(float ww, float wh, float aspect) {
   const float st = g_safe_top.load(), sb = g_safe_bottom.load();
   if (wh > ww * 1.05f) {   // upright
     float w = ww, h = ww / aspect;
+#if defined(__APPLE__) && TARGET_OS_IPHONE   // iPhone, iPad, Vision Pro: touch controls below, and iPhone Duo's fold
     const float cap = std::max(wh * 0.5f - st, wh * 0.25f);   // keep the fold (and room for controls) below the game
     if (h > cap) { h = cap; w = h * aspect; }
     return {(ww - w) * 0.5f, std::min(st, std::max(0.0f, wh - sb - h)), w, h};
+#else
+    (void)sb;
+    return {(ww - w) * 0.5f, (wh - h) * 0.5f, w, h};   // a tall Mac window or portrait display: centred at full width
+#endif
   }
   float h = wh, w = wh * aspect;
   if (w > ww) { w = ww; h = ww / aspect; }

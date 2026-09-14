@@ -1114,7 +1114,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
 // What in this setup costs latency, checked about once a second (display, network, controller, audio, delay, heat).
 - (void)refreshReadiness {
   if (!self.readinessStack) return;
-  const int delay = self.delayControl ? (int)self.delayControl.selectedSegmentIndex + 1 : self.settings->online_delay;
+  const int delay = self.delayControl ? [self selectedDelay] : self.settings->online_delay;
   const std::vector<host::ReadinessItem> items = host::competitive_readiness(display_max_hz(), false, delay);
   std::string sig;
   for (const host::ReadinessItem& i : items) sig += (i.ok ? "1" : "0") + i.text + ";";
@@ -1157,7 +1157,9 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   [s addArrangedSubview:[self sliderRow:@"Sharpen" symbol:@"sparkles" slider:self.sharpnessSlider format:@"%.0f%%" scale:100]];
   self.onlineSwitch = [[UISwitch alloc] init]; self.onlineSwitch.on = self.settings->online; self.onlineSwitch.onTintColor = kYellow();
   [s addArrangedSubview:[self row:@"Slippi Online services" symbol:@"network" control:self.onlineSwitch]];
-  self.delayControl = [self segments:@[@"1", @"2", @"3", @"4"] selected:MAX(0, MIN(3, self.settings->online_delay - 1))];
+  NSMutableArray<NSString*>* delays = [@[@"1", @"2", @"3", @"4"] mutableCopy];   // plus the exact value when a larger one was set in the in-game menu
+  if (self.settings->online_delay > 4) [delays addObject:[NSString stringWithFormat:@"%d", self.settings->online_delay]];
+  self.delayControl = [self segments:delays selected:self.settings->online_delay > 4 ? 4 : MAX(0, self.settings->online_delay - 1)];
   [s addArrangedSubview:[self row:@"Online input delay (frames)" symbol:@"timer" control:self.delayControl]];
   [s addArrangedSubview:[self label:@"Each frame of delay adds 16.7 ms. 1 is the lowest latency on a stable, nearby connection; 2 is Slippi's default and rolls back less on Wi-Fi. For online play a USB-C Ethernet adapter beats Wi-Fi." size:12 weight:UIFontWeightRegular alpha:0.6]];
   UIButton* preset = [self button:@"Competitive preset" symbol:@"bolt.fill" prominent:NO];
@@ -1449,6 +1451,11 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   else { self.startupError = nil; self.settings->iso = std::string(dest.fileSystemRepresentation); }
   [self refreshDisc];
 }
+// The online delay the dashboard shows: 1-4, or the exact larger value set in the in-game menu (the fifth segment).
+- (int)selectedDelay {
+  const NSInteger i = self.delayControl.selectedSegmentIndex;
+  return i >= 4 ? MAX(5, self.settings->online_delay) : (int)MAX(0, i) + 1;
+}
 - (void)applyCompetitivePreset {
   haptic_impact();
   [self.scaleControl setSelectedSegmentIndex:2]; [self.anisoControl setSelectedSegmentIndex:2];   // 2x: the lowest-latency resolution that still looks crisp
@@ -1463,7 +1470,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   self.settings->vsync = self.vsyncSwitch.on;
   self.settings->widescreen = self.widescreenSwitch.on;
   self.settings->online = self.onlineSwitch.on;
-  if (self.settings->online_delay <= 4 || self.delayControl.selectedSegmentIndex != 3) self.settings->online_delay = (int)self.delayControl.selectedSegmentIndex + 1;   // keeps a larger value set by hand
+  if (self.delayControl) self.settings->online_delay = [self selectedDelay];
   self.settings->sharpness = self.sharpnessSlider.value;
   self.settings->overlay_opacity = self.overlaySlider.value;
   self.settings->overlay_scale = self.overlayScaleSlider.value;

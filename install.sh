@@ -39,7 +39,7 @@ done
 print -r -- "$ISO" > "$DIR/.disc-path"
 
 yellow "Building iSlippi from your disc (about ten to fifteen minutes the first time)"
-ISLIPPI_NO_OPEN=1 "$DIR/setup.sh" "$ISO"
+ISLIPPI_NO_OPEN=1 "$DIR/setup.sh" "$ISO" < /dev/tty   # setup may run Homebrew's installer, which needs the terminal to ask for your password
 
 DEST=/Applications
 [[ -w "$DEST" ]] || { DEST="$HOME/Applications"; mkdir -p "$DEST"; }
