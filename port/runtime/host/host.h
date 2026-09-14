@@ -93,6 +93,7 @@ bool state_trace_output_ok();
 enum SimCost { SIM_DVD, SIM_AX, SIM_JUKEBOX, SIM_EXI, SIM_SNAPSHOT, SIM_QUEUE, SIM_OBSERVE, SIM_RENDER, SIM_TEXTURE, SIM_PUMP, SIM_GPUWAIT, SIM_DRAWABLE, SIM_COST_COUNT };
 void sim_cost_add(int slot, double seconds);
 double last_sim_frame_ms();            // work time of the most recent simulation frame (sleep excluded)
+uint64_t late_frame_count();           // simulation frames that took longer than one 60 Hz period
 
 // ---- time ----
 constexpr uint64_t TB_HZ = 40500000ull;   // bus clock / 4
@@ -120,6 +121,8 @@ void thread_realtime(const char* name, double computation_ms);
 // Power and thermal state (Apple platforms; no-ops elsewhere): keeps the machine from throttling
 // timers or sleeping the display while a game runs, and logs thermal-state changes.
 void power_play_begin();
+// A system notification when the app is not in front (macOS app bundles only; a no-op elsewhere).
+void notify_local(const std::string& title, const std::string& body);
 void power_play_end();
 const char* thermal_state_name();
 double now_seconds();

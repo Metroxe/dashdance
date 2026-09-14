@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "dashboard.h"
+#include "slippi_http_apple.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -104,6 +105,15 @@ bool dashboard_load_profile(const std::string& slippi_dir, Dashboard& d) {
   d.profile_loaded = true;
   if (!d.profile.display_name.empty()) d.name = d.profile.display_name;
   if (!d.profile.connect_code.empty()) d.code = d.profile.connect_code;
+  return true;
+}
+bool dashboard_load_network(Dashboard& d) {
+  int status = 0; std::string body, error;
+  if (!slippi::report::apple_http("GET", "https://api4.ipify.org", "", "", "iSlippi", &status, &body, &error)) { d.ipv4_error = error.empty() ? "no connection" : error; return false; }
+  if (status != 200) { d.ipv4_error = "HTTP " + std::to_string(status); return false; }
+  while (!body.empty() && (body.back() == '\n' || body.back() == '\r' || body.back() == ' ')) body.pop_back();
+  if (body.empty() || body.find('.') == std::string::npos || body.size() > 15) { d.ipv4_error = "unexpected answer"; return false; }
+  d.public_ipv4 = body;
   return true;
 }
 void dashboard_load_games(const std::string& replay_dir, Dashboard& d, size_t limit) { d.games = slippi::history::recent_games(replay_dir, limit); }

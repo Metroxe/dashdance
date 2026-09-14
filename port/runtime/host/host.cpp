@@ -495,6 +495,8 @@ static std::string sim_cost_line(uint32_t frames) {
   }
   return buf;
 }
+static uint64_t g_late_frames = 0;
+uint64_t late_frame_count() { return g_late_frames; }
 double last_sim_frame_ms() { return g_last_sim_ms; }
 
 void thread_realtime(const char* name, double computation_ms) {
@@ -516,6 +518,7 @@ void thread_realtime(const char* name, double computation_ms) {
 }
 void simulation_thread_realtime() { thread_realtime("simulation", 5.0); }
 #if !defined(__APPLE__)
+void notify_local(const std::string&, const std::string&) {}
 void power_play_begin() {}
 void power_play_end() {}
 const char* thermal_state_name() { return "unknown"; }
@@ -565,6 +568,7 @@ void retrace() {
       g_sim_ms_window += g_last_sim_ms;
       if (g_last_sim_ms > g_sim_ms_worst) g_sim_ms_worst = g_last_sim_ms;
       if (g_last_sim_ms > 16.7) {
+        if (g_retraces > 300) ++g_late_frames;   // boot warm-up (shader and texture first use) is not gameplay
         char detail[256] = ""; size_t n = 0;
         for (int i = 0; i < SIM_COST_COUNT; ++i) if (g_sim_costs[i] * 1000.0 >= 0.5) n += (size_t)std::snprintf(detail + n, sizeof detail - n, " %s %.1f", g_sim_cost_names[i], g_sim_costs[i] * 1000.0);
         log("sim frame %u took %.1f ms (ms:%s%s)", g_retraces, g_last_sim_ms, detail, n ? "" : " guest code");

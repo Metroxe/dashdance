@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace host {
@@ -17,10 +18,20 @@ struct OverlayShape {
 };
 constexpr const char* kOverlayLabels[] = {"", "A", "B", "X", "Y", "Z", "L", "R", "Start", "Taunt", "C"};
 constexpr int kOverlayLabelCount = (int)(sizeof kOverlayLabels / sizeof kOverlayLabels[0]);
+// Free text drawn from an ASCII glyph atlas (menus, HUD). `size` is the line height in window pixels.
+struct OverlayText {
+  float x, y, size;       // top-left of the line box, window pixels
+  float r, g, b, a;
+  int align;              // 0 left, 1 centre, 2 right (about x)
+  std::string text;
+};
 struct OverlayFrame {
   std::vector<OverlayShape> shapes;
-  float alpha = 0.0f;     // whole-overlay opacity after fade
+  std::vector<OverlayText> texts;
+  float alpha = 0.0f;     // whole-overlay opacity after fade (shapes only; texts carry their own alpha)
 };
+// Everything drawn over the game: touch controls, the in-game menu and the performance HUD.
+bool game_overlay(OverlayFrame& out);
 // Fills `out` with the current overlay; returns false when nothing should be drawn.
 bool touch_overlay(OverlayFrame& out);
 void touch_set_opacity(float opacity);    // 0..1, user setting

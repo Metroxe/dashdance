@@ -33,6 +33,7 @@ bool handle(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, std::vect
 #include "slippi_net.h"
 #include "slippi_report.h"
 #include "exi_slippi.h"
+#include "discord_rpc.h"
 #include "host.h"
 #include "window.h"
 #include <algorithm>
@@ -153,6 +154,8 @@ std::map<int32_t, std::unique_ptr<Savestate>> g_active_savestates;
 std::deque<std::unique_ptr<Savestate>> g_available_savestates;
 PlayerSelections g_local_selections;
 Matchmaking::MatchSearchSettings g_last_search;
+const char* mode_name(Matchmaking::OnlinePlayMode m) { return m == Matchmaking::RANKED ? "ranked" : m == Matchmaking::UNRANKED ? "unranked" : m == Matchmaking::DIRECT ? "direct" : m == Matchmaking::TEAMS ? "teams" : "online"; }
+const char* mode_title(Matchmaking::OnlinePlayMode m) { return m == Matchmaking::RANKED ? "Ranked" : m == Matchmaking::UNRANKED ? "Unranked" : m == Matchmaking::DIRECT ? "Direct" : m == Matchmaking::TEAMS ? "Teams" : "Online"; }
 Matchmaking::MatchmakeResult g_recent_mm_result;
 std::vector<uint16_t> g_allowed_stages = {0x2, 0x3, 0x8, 0x1C, 0x1F, 0x20};
 std::vector<uint16_t> g_stage_pool;
@@ -192,6 +195,7 @@ void cleanup_connection() {
   }
   g_matchmaking = std::make_unique<Matchmaking>(g_user.get());
   g_netplay = nullptr;
+  discord::set_menus();
   g_local_selections.Reset();
   g_stage_pool.clear();
   g_forced_error.clear();
@@ -439,6 +443,7 @@ void start_find_match(const uint8_t* payload) {
     g_forced_error = "The character you selected is not allowed in this mode"; return;
   }
   if (!enet_ready()) { g_forced_error = "Networking unavailable"; return; }
+  discord::set_searching(mode_name(search.mode));
   g_matchmaking->FindMatch(search);
 }
 
@@ -542,6 +547,20 @@ void prepare_online_match_state(std::vector<uint8_t>& q) {
     if (!g_netplay) {
       g_netplay = g_matchmaking->GetNetplayClient();
       g_recent_mm_result = g_matchmaking->GetMatchmakeResult();
+      {   // presence and a "match found" notification for a Mac that is not in front
+        std::string opponent, opponent_with_code; int opponent_rank = 0;
+        const std::vector<UserInfo>& players = g_recent_mm_result.players;
+        for (size_t i = 0; i < players.size(); ++i) {
+          if (players[i].port - 1 == g_local_player_index) continue;
+          if (!opponent.empty()) { opponent += ", "; opponent_with_code += ", "; }
+          opponent += players[i].display_name;
+          opponent_with_code += players[i].display_name + " (" + players[i].connect_code + ")";
+          if (!opponent_rank) opponent_rank = g_matchmaking->GetPlayerRank((uint8_t)i);
+        }
+        discord::set_local_port(g_local_player_index);
+        discord::set_opponent(mode_name(g_last_search.mode), opponent, opponent_rank);
+        host::notify_local("Match found", "vs " + opponent_with_code + "  ·  " + mode_title(g_last_search.mode));
+      }
       g_allowed_stages = g_recent_mm_result.stages;
       if (g_allowed_stages.empty()) g_allowed_stages = {0x2, 0x3, 0x8, 0x1C, 0x1F, 0x20};
       g_stage_pool.clear();
@@ -568,6 +587,7 @@ void prepare_online_match_state(std::vector<uint8_t>& q) {
     if (!g_play_session_active) g_play_session_active = true;
   } else {
     g_netplay = nullptr;
+    discord::set_menus();
   }
   uint32_t rng_offset = 0;
   std::string local_name, opp_name;
@@ -831,6 +851,7 @@ void shutdown() {
     if (id.find("mode.ranked") != std::string::npos) host::log("slippi: exit during ranked match %s", id.c_str());
   }
   g_netplay.reset();
+  discord::set_menus();
   g_matchmaking.reset();
   g_active_savestates.clear();
   g_available_savestates.clear();

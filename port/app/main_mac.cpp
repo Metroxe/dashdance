@@ -11,6 +11,8 @@
 #include "input_config.h"
 #include "hle_dvd.h"
 #include "host.h"
+#include "discord_rpc.h"
+#include "game_menu.h"
 #include "mac_launcher.h"
 #include "numeric.h"
 #include "slippi_net.h"
@@ -128,12 +130,23 @@ bool ensure_dir(const std::string& path, const char* what) {
 }
 }  // namespace
 
+// launcher.ini: what the dashboard chose, also rewritten at exit when the in-game menu changed something.
+static void save_launcher_ini(const fs::path& path, const host::LauncherSettings& settings) {
+  std::ofstream out(path, std::ios::trunc);
+  out << "iso=" << settings.iso << "\nwidescreen=" << (settings.widescreen ? 1 : 0) << "\nonline=" << (settings.online ? 1 : 0)
+      << "\nsharpness=" << settings.sharpness << "\noverlay=" << settings.overlay_opacity << "\noverlay_scale=" << settings.overlay_scale
+      << "\nscale=" << settings.scale << "\nanisotropy=" << settings.anisotropy << "\nvsync=" << (settings.vsync ? 1 : 0)
+      << "\nfullscreen=" << (settings.fullscreen ? 1 : 0) << "\nvolume=" << settings.volume << "\nhud=" << (settings.hud ? 1 : 0)
+      << "\ndiscord=" << (settings.discord_enabled ? 1 : 0) << "\ndiscord_rank=" << (settings.discord_show_rank ? 1 : 0) << "\n";
+  for (const host::ControllerConfig& c : host::controller_configs()) out << "controller." << c.guid << "=" << c.port << "|" << c.map.serialize() << "\n";
+}
+
 int main(int argc, char** argv) {
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);   // the game simulation runs on this thread: keep it on performance cores
   host::Options& o = host::options;
   auto& online = slippi::online::config();
   bool allow_interpreter = true;
-  int volume = 70;
+  int volume = 70; bool volume_arg = false;
   uint32_t window_w = 1280, window_h = 960;
   gx::MetalOptions gfx;
   std::string script, iso_arg, user_dir, sys_dir, replay_dir, card_dir, profile_dir, cache_dir, log_file;
@@ -147,7 +160,7 @@ int main(int argc, char** argv) {
     else if (a == "--help" || a == "-h") { usage(); return 0; }
     else if (a == "--iso") iso_arg = next();
     else if (a == "--choose-disc") choose_disc = true;
-    else if (a == "--volume") volume = std::atoi(next());
+    else if (a == "--volume") { volume = std::atoi(next()); volume_arg = true; }
     else if (a == "--window") { if (std::sscanf(next(), "%ux%u", &window_w, &window_h) != 2 || window_w < 320 || window_h < 240) { usage(); return 2; } }
     else if (a == "--no-vsync") gfx.vsync = false;
     else if (a == "--fullscreen") fullscreen_arg = true;
@@ -218,6 +231,10 @@ int main(int argc, char** argv) {
       else if (const char* v = value("anisotropy=")) settings.anisotropy = std::clamp(std::atoi(v), 1, 16);
       else if (const char* v = value("vsync=")) settings.vsync = *v != '0';
       else if (const char* v = value("fullscreen=")) settings.fullscreen = *v == '1';
+      else if (const char* v = value("volume=")) settings.volume = std::clamp(std::atoi(v), 0, 100);
+      else if (const char* v = value("hud=")) settings.hud = *v == '1';
+      else if (const char* v = value("discord=")) settings.discord_enabled = *v == '1';
+      else if (const char* v = value("discord_rank=")) settings.discord_show_rank = *v == '1';
       else if (const char* v = value("controller.")) {   // controller.<guid>=<port>|<mapping>
         std::string rest = v; size_t eq = rest.find('='), bar = rest.find('|', eq == std::string::npos ? 0 : eq);
         if (eq != std::string::npos && bar != std::string::npos) {
@@ -258,20 +275,13 @@ int main(int argc, char** argv) {
     if (!host::launcher_run(settings, previous_error) || settings.iso.empty()) return 0;
     iso_arg = settings.iso;
     if (!settings.online) offline = true;
-    if (ensure_dir(support.string(), "support")) {
-      std::ofstream out(remembered, std::ios::trunc);
-      out << "iso=" << settings.iso << "\nwidescreen=" << (settings.widescreen ? 1 : 0) << "\nonline=" << (settings.online ? 1 : 0)
-          << "\nsharpness=" << settings.sharpness << "\noverlay=" << settings.overlay_opacity << "\noverlay_scale=" << settings.overlay_scale
-          << "\nscale=" << settings.scale << "\nanisotropy=" << settings.anisotropy << "\nvsync=" << (settings.vsync ? 1 : 0)
-          << "\nfullscreen=" << (settings.fullscreen ? 1 : 0) << "\n";
-      for (const host::ControllerConfig& c : host::controller_configs()) out << "controller." << c.guid << "=" << c.port << "|" << c.map.serialize() << "\n";
-    }
+    if (ensure_dir(support.string(), "support")) save_launcher_ini(remembered, settings);
   }
   // Command-line flags win over remembered launcher values.
   host::touch_set_opacity(overlay_opacity_arg >= 0.0f ? overlay_opacity_arg : settings.overlay_opacity);
   gfx.widescreen = widescreen_arg || settings.widescreen;
   gfx.sharpness = sharpness_arg >= 0.0f ? sharpness_arg : settings.sharpness;
-  if (show_launcher) { gfx.efb_scale = settings.scale; gfx.anisotropy = settings.anisotropy; gfx.vsync = settings.vsync; }
+  if (show_launcher) { gfx.efb_scale = settings.scale; gfx.anisotropy = settings.anisotropy; gfx.vsync = settings.vsync; if (!volume_arg) volume = settings.volume; }
   host::touch_set_scale(settings.overlay_scale);
   host::touch_set_game_aspect(gfx.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f);
   if (profile_dir.empty()) profile_dir = (support / "User").string();
@@ -334,11 +344,33 @@ int main(int argc, char** argv) {
     host::log("display: %.0f Hz refresh; the game simulates at 60 Hz and each frame is shown on the next refresh slot", host::window_refresh_rate());
     host::window_set_resize_callback([backend](int w, int h) { gx::metal_resize(backend, w, h); });
     if (settings.fullscreen || fullscreen_arg) host::window_set_fullscreen(true);
-    gx::metal_set_overlay(backend, host::touch_overlay);
+    gx::metal_set_overlay(backend, host::game_overlay);
+    {
+      host::RuntimeSettings rs;
+      rs.scale = gfx.efb_scale; rs.anisotropy = gfx.anisotropy; rs.sharpness = gfx.sharpness; rs.widescreen = gfx.widescreen; rs.vsync = gfx.vsync;
+      rs.volume = std::clamp(volume, 0, 100); rs.overlay_opacity = settings.overlay_opacity; rs.overlay_scale = settings.overlay_scale;
+      rs.hud = settings.hud; rs.fullscreen = settings.fullscreen || fullscreen_arg;
+      host::menu_init(rs, [backend, &gfx](const host::RuntimeSettings& s, host::MenuChange what) {
+        switch (what) {
+          case host::MenuChange::Graphics: gfx.efb_scale = s.scale; gfx.anisotropy = s.anisotropy; gfx.sharpness = s.sharpness; gfx.vsync = s.vsync; gx::metal_set_options(backend, gfx); break;
+          case host::MenuChange::Volume: host::audio_set_volume(s.volume); break;
+          case host::MenuChange::TouchControls: host::touch_set_opacity(s.overlay_opacity); host::touch_set_scale(s.overlay_scale); break;
+          case host::MenuChange::Fullscreen: host::window_set_fullscreen(s.fullscreen); break;
+          case host::MenuChange::Hud: case host::MenuChange::Widescreen: break;
+        }
+      });
+    }
     host::g_has_window = true;
     gx::init(backend);
     if (!host::audio_open(o.volume, o.audio_dump.c_str(), true)) host::log("audio: device unavailable, continuing silent");
     audio_opened = true;
+    {
+      const char* override_id = std::getenv("MELEE_DISCORD_APP_ID");   // test aid: another Discord application
+      if (settings.discord_enabled || (override_id && *override_id)) {
+        slippi::discord::start(settings.discord_show_rank, override_id ? override_id : "");
+        slippi::discord::set_player(settings.account_name, settings.account_code, settings.rank, settings.rating);
+      }
+    }
 
     ppc::init_dispatch();
     ppc::watch_init();
@@ -369,6 +401,7 @@ int main(int argc, char** argv) {
               (unsigned long long)underruns, (unsigned long long)silent_ms, (rate_low - 1.0) * 100.0, (rate_high - 1.0) * 100.0); }
   gx::init(nullptr);
   host::g_has_window = false;
+  slippi::discord::stop();
   if (audio_opened) host::audio_close();
   hle::dvd_shutdown();
   host::gcadapter_shutdown();
@@ -378,6 +411,13 @@ int main(int argc, char** argv) {
     host::window_set_resize_callback(nullptr);
     gx::metal_set_overlay(backend, nullptr);
     delete backend;
+  }
+  if (host::menu_changed()) {   // the in-game menu is the dashboard's twin: what it changed is remembered
+    const host::RuntimeSettings rs = host::menu_settings();
+    settings.scale = rs.scale; settings.anisotropy = rs.anisotropy; settings.sharpness = rs.sharpness; settings.widescreen = rs.widescreen; settings.vsync = rs.vsync;
+    settings.volume = rs.volume; settings.overlay_opacity = rs.overlay_opacity; settings.overlay_scale = rs.overlay_scale; settings.hud = rs.hud; settings.fullscreen = rs.fullscreen;
+    if (settings.iso.empty()) settings.iso = iso_arg;
+    std::error_code ec; if (fs::is_directory(support, ec)) save_launcher_ini(remembered, settings);
   }
   host::power_play_end();
   host::window_destroy();

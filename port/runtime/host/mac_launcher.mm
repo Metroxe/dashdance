@@ -289,6 +289,7 @@ API_AVAILABLE(macos(26.0))
 @property(nonatomic) host::Dashboard dashboard;
 @property(nonatomic) NSWindow* window;
 @property(nonatomic) NSStackView* stack;
+@property(nonatomic) NSScrollView* scroll;
 @property(nonatomic) NSArray<NSView*>* entrance;
 @property(nonatomic, copy) NSString* startupError;
 @property(nonatomic) BOOL busy, closed;
@@ -307,6 +308,7 @@ API_AVAILABLE(macos(26.0))
 // controllers
 @property(nonatomic) NSStackView* controllersStack; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic) std::string controllerSignature; @property(nonatomic) unsigned tickCount; @property(nonatomic, copy) NSString* remapGuid; @property(nonatomic) int capturing; @property(nonatomic) BOOL armed; @property(nonatomic) NSArray<NSButton*>* remapButtons;
 // display
+@property(nonatomic) NSSwitch* discordSwitch; @property(nonatomic) NSSwitch* discordRankSwitch; @property(nonatomic) NSTextField* regionLabel;
 @property(nonatomic) NSSegmentedControl* scaleControl; @property(nonatomic) NSSegmentedControl* anisoControl; @property(nonatomic) NSSwitch* vsyncSwitch; @property(nonatomic) NSSwitch* fullscreenSwitch; @property(nonatomic) NSSwitch* widescreenSwitch; @property(nonatomic) NSSlider* sharpness; @property(nonatomic) NSSwitch* onlineSwitch;
 - (void)acceptDroppedDisc:(NSString*)path;
 - (void)play;
@@ -345,6 +347,7 @@ API_AVAILABLE(macos(26.0))
   MUBackdropView* backdrop = [[MUBackdropView alloc] initWithFrame:frame];
   [content addSubview:backdrop];
   NSScrollView* scroll = [[NSScrollView alloc] init];
+  self.scroll = scroll;
   scroll.translatesAutoresizingMaskIntoConstraints = NO; scroll.drawsBackground = NO; scroll.hasVerticalScroller = YES; scroll.automaticallyAdjustsContentInsets = NO;
   NSView* doc = [[MUFlippedView alloc] init]; doc.translatesAutoresizingMaskIntoConstraints = NO;   // the scroll document
   NSView* column = doc;                                                                               // where the cards live
@@ -379,6 +382,8 @@ API_AVAILABLE(macos(26.0))
   NSView* disc = [self buildDisc];
   NSView* controllers = [self buildControllers];
   NSView* display = [self buildDisplay];
+  NSView* discordCard = [self buildDiscord];
+  NSView* regionCard = [self buildRegion];
   self.playButton = [NSButton buttonWithTitle:@"  PLAY  " target:self action:@selector(play)];
   self.playButton.bezelStyle = NSBezelStyleRounded; self.playButton.controlSize = NSControlSizeLarge; self.playButton.keyEquivalent = @"\r";
   if (@available(macOS 26.0, *)) self.playButton.bezelStyle = NSBezelStyleGlass;
@@ -387,9 +392,9 @@ API_AVAILABLE(macos(26.0))
   [self.playButton.heightAnchor constraintEqualToConstant:44].active = YES;
   NSTextField* footer = label(@"Needs your own Super Smash Bros. Melee NTSC 1.02 disc image. Nothing from the game ships with the app. Unofficial; not affiliated with the Slippi team or Nintendo.", 11, NSFontWeightRegular, 0.45);
   footer.alignment = NSTextAlignmentCenter;
-  for (NSView* v in @[hero, self.stepsCard, self.rankedCard, self.gamesCard, account, disc, controllers, display, self.playButton, footer]) [self.stack addArrangedSubview:v];
+  for (NSView* v in @[hero, self.stepsCard, self.rankedCard, self.gamesCard, account, disc, controllers, display, regionCard, discordCard, self.playButton, footer]) [self.stack addArrangedSubview:v];
   [self.stack setCustomSpacing:26 afterView:hero];
-  self.entrance = @[hero, self.stepsCard, self.rankedCard, self.gamesCard, account, disc, controllers, display, self.playButton];
+  self.entrance = @[hero, self.stepsCard, self.rankedCard, self.gamesCard, account, disc, controllers, display, regionCard, discordCard, self.playButton];
   for (NSView* v in self.entrance) v.alphaValue = 0;
   [self refreshDisc]; [self refreshAccount]; [self refreshControllers]; [self refreshSteps];
   [self loadDashboard];
@@ -654,6 +659,43 @@ API_AVAILABLE(macos(26.0))
   return card;
 }
 
+- (NSView*)buildDiscord {
+  NSView* card = [self card];
+  NSStackView* s = [self stackIn:card header:@"DISCORD" symbol:@"bubble.left.and.bubble.right"];
+  self.discordSwitch = [self toggle:self.settings->discord_enabled];
+  [s addArrangedSubview:[self row:@"Show what I'm playing on Discord" symbol:@"gamecontroller" control:self.discordSwitch]];
+  self.discordRankSwitch = [self toggle:self.settings->discord_show_rank];
+  [s addArrangedSubview:[self row:@"Show my rank" symbol:@"trophy" control:self.discordRankSwitch]];
+  [s addArrangedSubview:label(@"Your status follows the game: menus, the queue, your opponent, then the stage, characters, live stocks and set score, with your rank badge and a link to your slippi.gg profile. It goes through the Discord app on this Mac, so there is nothing to sign in to, and nothing happens when Discord is not running.", 11, NSFontWeightRegular, 0.6)];
+  return card;
+}
+- (NSView*)buildRegion {
+  NSView* card = [self card];
+  NSStackView* s = [self stackIn:card header:@"MATCHMAKING REGION" symbol:@"globe"];
+  self.regionLabel = label(@"Checking your public IPv4 address…", 13, NSFontWeightMedium, 1);
+  [s addArrangedSubview:self.regionLabel];
+  [s addArrangedSubview:label(@"Slippi's matchmaking places you by the region of this address, looked up at ipgeolocation.io. If the lookup lands far from you, you get matched far from home. Check it; if it is wrong, send ipgeolocation the correction request (copied with your address filled in).", 11, NSFontWeightRegular, 0.6)];
+  NSStackView* buttons = [[NSStackView alloc] init]; buttons.orientation = NSUserInterfaceLayoutOrientationHorizontal; buttons.spacing = 8;
+  [buttons addArrangedSubview:[self button:@"Check my region" symbol:@"location.magnifyingglass" action:@selector(openRegionCheck)]];
+  [buttons addArrangedSubview:[self button:@"Copy correction request" symbol:@"doc.on.doc" action:@selector(copyRegionReport)]];
+  [buttons addArrangedSubview:[self button:@"Contact form" symbol:@"envelope" action:@selector(openRegionContact)]];
+  [s addArrangedSubview:buttons];
+  return card;
+}
+- (void)refreshRegion {
+  const host::Dashboard& d = self.dashboard;
+  if (!d.public_ipv4.empty()) self.regionLabel.stringValue = [NSString stringWithFormat:@"Your public IPv4 address: %s", d.public_ipv4.c_str()];
+  else if (!d.ipv4_error.empty()) self.regionLabel.stringValue = [NSString stringWithFormat:@"Could not determine your public IPv4 address (%s).", d.ipv4_error.c_str()];
+}
+- (void)openRegionCheck { [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://ipgeolocation.io/what-is-my-ip/"]]; }
+- (void)openRegionContact { [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://ipgeolocation.io/contact.html"]]; }
+- (void)copyRegionReport {
+  const std::string ip = self.dashboard.public_ipv4.empty() ? "<insert IP here>" : self.dashboard.public_ipv4;
+  NSString* text = [NSString stringWithFormat:@"Hi,\nYour service reports my IP (%s) to be at <X location>, but I'm actually located at <Y location>. Could you correct this?\nThank you.", ip.c_str()];
+  [NSPasteboard.generalPasteboard clearContents]; [NSPasteboard.generalPasteboard setString:text forType:NSPasteboardTypeString];
+  self.regionLabel.stringValue = [NSString stringWithFormat:@"Copied a correction request for %s. Paste it into the ipgeolocation contact form.", ip.c_str()];
+}
+
 // ---- state
 - (void)refreshSteps {
   const BOOL disc = !self.settings->iso.empty(), account = self.dashboard.signed_in, pad = self.controllerCount > 0;
@@ -689,6 +731,7 @@ API_AVAILABLE(macos(26.0))
 - (void)refreshRanked {
   if (g_status) { g_status.dashboard = self.dashboard; [g_status refresh]; }
   const host::Dashboard& d = self.dashboard;
+  if (self.settings) { self.settings->rank = d.profile_loaded && d.profile.ranked ? d.rank() : ""; self.settings->rating = d.profile.rating; }
   self.rankLabel.stringValue = ns(d.rank()); self.ratingLabel.stringValue = ns(d.rating());
   self.recordLabel.stringValue = d.profile_loaded ? ns(d.record()) : (d.profile_error.empty() ? @"Loading ranked profile…" : ns(d.profile_error));
   self.winBarWidth.active = NO;
@@ -837,10 +880,11 @@ API_AVAILABLE(macos(26.0))
     host::Dashboard d;
     host::dashboard_load_games(replay_dir, d, 8);
     host::dashboard_load_profile(slippi_dir, d);
+    host::dashboard_load_network(d);
     dispatch_async(dispatch_get_main_queue(), ^{
       MULauncherWindow* s = weakSelf; if (!s || s.closed || !s.settings) return;
       host::Dashboard merged = d; merged.signed_in = s.dashboard.signed_in || d.profile_loaded;
-      s.dashboard = merged; [s refreshAccount]; [s refreshGames];
+      s.dashboard = merged; [s refreshAccount]; [s refreshGames]; [s refreshRegion];
       if (g_status) { g_status.dashboard = s.dashboard; [g_status refresh]; }
     });
   });
@@ -904,6 +948,8 @@ API_AVAILABLE(macos(26.0))
   self.sharpness.doubleValue = 0; [self sliderChanged:self.sharpness];
 }
 - (void)play {
+  self.settings->discord_enabled = self.discordSwitch.state == NSControlStateValueOn;
+  self.settings->discord_show_rank = self.discordRankSwitch.state == NSControlStateValueOn;
   const int scales[] = {0, 1, 2, 3, 4, 6, 8};
   self.settings->scale = scales[MAX(0, MIN(6, self.scaleControl.selectedSegment))];
   self.settings->anisotropy = self.anisoControl.selectedSegment == 2 ? 16 : self.anisoControl.selectedSegment == 1 ? 4 : 1;
@@ -1004,8 +1050,9 @@ bool launcher_run(LauncherSettings& settings, const std::string& error) {
     [launcher animateIn];
     if (const char* scroll = std::getenv("MELEE_LAUNCHER_SCROLL"))   // screenshot aid: start scrolled down by N points
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        NSScrollView* sv = (NSScrollView*)launcher.stack.superview.superview.superview;
-        if ([sv isKindOfClass:NSScrollView.class]) { [sv.contentView scrollToPoint:NSMakePoint(0, std::atof(scroll))]; [sv reflectScrolledClipView:sv.contentView]; } });
+        NSScrollView* sv = launcher.scroll;   // held directly: the glass container reparents its content view
+        [launcher.window layoutIfNeeded];
+        if (sv) { [sv.contentView scrollToPoint:NSMakePoint(0, std::atof(scroll))]; [sv reflectScrolledClipView:sv.contentView]; } });
     NSModalResponse response = [NSApp runModalForWindow:launcher.window];
     launcher.closed = YES;
     if (g_status) { g_status.launcher = nil; g_status.playing = response == NSModalResponseOK; [g_status refresh]; }

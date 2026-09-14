@@ -110,6 +110,23 @@ fragment float4 clear_ps(ClearO i [[stage_in]], constant ClearC& c [[buffer(0)]]
 struct OvShape { float4 rect; float4 color; float4 params; uint label; float label_w; float label_h; float pad; };
 struct OvC { float2 size; float alpha; float pad; float4 labels[16]; };
 struct OvO { float4 pos [[position]]; float2 px; uint id [[flat]]; };
+// Text: one glyph quad per instance, sampled from the ASCII atlas (premultiplied output).
+struct TxGlyph { float4 rect; float4 uv; float4 color; };
+struct TxC { float2 size; float2 atlas; };
+struct TxO { float4 pos [[position]]; float2 uv; uint id [[flat]]; };
+vertex TxO text_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant TxGlyph* g [[buffer(0)]], constant TxC& c [[buffer(1)]]) {
+  float4 r = g[iid].rect, u = g[iid].uv;
+  bool right = (vid == 1 || vid == 2 || vid == 4), bottom = (vid == 2 || vid == 4 || vid == 5);
+  float2 p = float2(right ? r.z : r.x, bottom ? r.w : r.y);
+  TxO o; o.id = iid;
+  o.pos = float4(p / c.size * float2(2, -2) + float2(-1, 1), 0, 1);
+  o.uv = float2(right ? u.x + u.z : u.x, bottom ? u.y + u.w : u.y) / c.atlas;
+  return o;
+}
+fragment float4 text_ps(TxO i [[stage_in]], constant TxGlyph* g [[buffer(0)]], constant TxC& c [[buffer(1)]], texture2d<float> atlas [[texture(0)]], sampler samp [[sampler(0)]]) {
+  float a = atlas.sample(samp, i.uv).r * g[i.id].color.a;
+  return float4(g[i.id].color.rgb * a, a);
+}
 vertex OvO overlay_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant OvShape* shapes [[buffer(0)]], constant OvC& c [[buffer(1)]]) {
   float4 r = shapes[iid].rect + float4(-2, -2, 2, 2);
   float2 p = float2((vid == 1 || vid == 2 || vid == 4) ? r.z : r.x, (vid == 2 || vid == 4 || vid == 5) ? r.w : r.y);
@@ -246,7 +263,9 @@ class MetalBackend final : public Backend {
     blit_copy_ = make("blit_vs", "blit_ps", MTLPixelFormatRGBA8Unorm, false, false);
     clear_pipeline_ = make("clear_vs", "clear_ps", MTLPixelFormatRGBA8Unorm, true, false);
     overlay_pipeline_ = make("overlay_vs", "overlay_ps", MTLPixelFormatBGRA8Unorm, false, true);
+    text_pipeline_ = make("text_vs", "text_ps", MTLPixelFormatBGRA8Unorm, false, true);
     create_overlay_atlas();
+    create_glyph_atlas();
     if (!opts_.capture_path.empty()) async_compile_ = false;   // captured frames must be complete and deterministic
     precompile_from_cache();
     MTLDepthStencilDescriptor* ds = [MTLDepthStencilDescriptor new];
@@ -859,8 +878,94 @@ class MetalBackend final : public Backend {
     overlay_atlas_ = [device_ newTextureWithDescriptor:td];
     [overlay_atlas_ replaceRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0 withBytes:flipped.data() bytesPerRow:W];
   }
+  // ASCII 32..126 rendered once with CoreText into an R8 atlas; per-glyph placement metrics kept for layout.
+  struct Glyph { float u, v, w, h; float bearing_x, top; float advance; };
+  void create_glyph_atlas() {
+    const int W = 1024, H = 320, font_px = 40, cell_w = 48, cell_h = 60, per_row = W / cell_w;
+    std::vector<uint8_t> pixels((size_t)W * H, 0);
+    CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
+    CGContextRef ctx = CGBitmapContextCreate(pixels.data(), W, H, 8, W, gray, kCGImageAlphaNone);
+    if (!ctx) { CGColorSpaceRelease(gray); host::log("metal: no CoreGraphics context for the glyph atlas"); return; }
+    CGFloat white[] = {1.0, 1.0};
+    CGColorRef fg = CGColorCreate(gray, white);
+    CTFontRef font = CTFontCreateUIFontForLanguage(kCTFontUIFontEmphasizedSystem, font_px, nullptr);
+    CGContextTranslateCTM(ctx, 0, H); CGContextScaleCTM(ctx, 1, -1);
+    CGContextSetTextMatrix(ctx, CGAffineTransformMakeScale(1, -1));   // same flip as the label atlas: upright glyphs in top-down space
+    glyph_ascent_ = (float)CTFontGetAscent(font);
+    NSDictionary* attrs = @{(id)kCTFontAttributeName: (__bridge id)font, (id)kCTForegroundColorAttributeName: (__bridge id)fg};
+    for (int code = 32; code < 127; ++code) {
+      const int i = code - 32, cx = (i % per_row) * cell_w, cy = (i / per_row) * cell_h;
+      unichar ch = (unichar)code;
+      NSAttributedString* text = [[NSAttributedString alloc] initWithString:[NSString stringWithCharacters:&ch length:1] attributes:attrs];
+      CTLineRef line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)text);
+      CGRect bounds = CTLineGetBoundsWithOptions(line, kCTLineBoundsUseGlyphPathBounds);
+      const double advance = CTLineGetTypographicBounds(line, nullptr, nullptr, nullptr);
+      const int w = (int)std::ceil(bounds.size.width) + 2, h = (int)std::ceil(bounds.size.height) + 2;
+      Glyph& gl = glyphs_[i];
+      gl.advance = (float)advance; gl.bearing_x = (float)bounds.origin.x - 1; gl.top = (float)(bounds.origin.y + bounds.size.height) + 1;
+      gl.u = (float)(cx + 1); gl.v = (float)(cy + 1); gl.w = (float)w; gl.h = (float)h;
+      if (bounds.size.width <= 0 || bounds.size.height <= 0 || w > cell_w || h > cell_h) { gl.w = gl.h = 0; CFRelease(line); continue; }
+      // Ink starts 1 px inside the box (top-down space, flipped text matrix), exactly like the label atlas.
+      CGContextSetTextPosition(ctx, cx + 2 - bounds.origin.x, cy + 2 + bounds.origin.y + bounds.size.height);
+      CTLineDraw(line, ctx);
+      CFRelease(line);
+    }
+    CFRelease(fg);
+    CFRelease(font); CGContextRelease(ctx); CGColorSpaceRelease(gray);
+    size_t ink = 0; for (uint8_t v : pixels) ink += v > 0;
+    host::log("metal: glyph atlas %dx%d, %zu lit texels, ascent %.1f, 'A' box %.0fx%.0f advance %.1f", W, H, ink, glyph_ascent_, glyphs_['A' - 32].w, glyphs_['A' - 32].h, glyphs_['A' - 32].advance);
+    if (const char* dump = std::getenv("MELEE_DUMP_GLYPHS")) { std::ofstream out(dump, std::ios::binary); out << "P5\n" << W << " " << H << "\n255\n"; out.write((const char*)pixels.data(), (std::streamsize)pixels.size()); }
+    MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Unorm width:W height:H mipmapped:NO];
+    td.usage = MTLTextureUsageShaderRead;
+    glyph_atlas_ = [device_ newTextureWithDescriptor:td];
+    [glyph_atlas_ replaceRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0 withBytes:pixels.data() bytesPerRow:W];
+    glyph_font_px_ = (float)font_px;
+  }
+  float text_width(const std::string& t, float size) const {
+    const float k = size / glyph_font_px_; float w = 0;
+    for (unsigned char c : t) if (c >= 32 && c < 127) w += glyphs_[c - 32].advance * k;
+    return w;
+  }
+  void draw_texts(id<MTLRenderCommandEncoder> enc, float ww, float wh) {
+    if (!glyph_atlas_ || overlay_frame_.texts.empty()) return;
+    struct TxGlyphCpu { float rect[4]; float uv[4]; float color[4]; };
+    std::vector<TxGlyphCpu> quads;
+    for (const host::OverlayText& t : overlay_frame_.texts) {
+      const float k = t.size / glyph_font_px_;
+      float x = t.x;
+      if (t.align) { const float w = text_width(t.text, t.size); x -= t.align == 1 ? w * 0.5f : w; }
+      const float baseline = t.y + glyph_ascent_ * k;
+      for (unsigned char c : t.text) {
+        if (c < 32 || c >= 127) continue;
+        const Glyph& g = glyphs_[c - 32];
+        if (g.w > 0) {
+          const float gx = x + g.bearing_x * k, gy = baseline - g.top * k;
+          quads.push_back({{gx, gy, gx + g.w * k, gy + g.h * k}, {g.u, g.v, g.w, g.h}, {t.r, t.g, t.b, t.a}});
+        }
+        x += g.advance * k;
+      }
+    }
+    if (quads.empty()) return;
+    if (!text_logged_) { text_logged_ = true; host::log("metal: text pass: %zu glyph quads, first at (%.0f,%.0f)-(%.0f,%.0f) uv (%.0f,%.0f,%.0f,%.0f)", quads.size(), quads[0].rect[0], quads[0].rect[1], quads[0].rect[2], quads[0].rect[3], quads[0].uv[0], quads[0].uv[1], quads[0].uv[2], quads[0].uv[3]); }
+    struct TxCCpu { float size[2]; float atlas[2]; } tc{{ww, wh}, {(float)glyph_atlas_.width, (float)glyph_atlas_.height}};
+    [enc setRenderPipelineState:text_pipeline_];
+    id<MTLBuffer> gb = [device_ newBufferWithBytes:quads.data() length:quads.size() * sizeof(TxGlyphCpu) options:MTLResourceStorageModeShared];
+    [enc setVertexBuffer:gb offset:0 atIndex:0];
+    [enc setVertexBytes:&tc length:sizeof tc atIndex:1];
+    [enc setFragmentBuffer:gb offset:0 atIndex:0];
+    [enc setFragmentBytes:&tc length:sizeof tc atIndex:1];
+    [enc setFragmentTexture:glyph_atlas_ atIndex:0];
+    [enc setFragmentSamplerState:blit_sampler_ atIndex:0];
+    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6 instanceCount:quads.size()];
+  }
   void draw_overlay(id<MTLRenderCommandEncoder> enc, float ww, float wh) {
-    if (!overlay_ || !overlay_(overlay_frame_) || overlay_frame_.shapes.empty()) return;
+    if (!overlay_ || !overlay_(overlay_frame_)) return;
+    [enc setViewport:MTLViewport{0, 0, ww, wh, 0, 1}];
+    draw_shapes(enc, ww, wh);
+    draw_texts(enc, ww, wh);
+  }
+  void draw_shapes(id<MTLRenderCommandEncoder> enc, float ww, float wh) {
+    if (overlay_frame_.shapes.empty()) return;
     static_assert(sizeof(OvShape) == 64, "overlay shape layout must match the shader");
     static_assert(sizeof(OvConstants) == 272, "overlay constants layout must match the shader");
     static_assert(host::kOverlayLabelCount <= 16, "the shader holds 16 label rects");
@@ -870,7 +975,6 @@ class MetalBackend final : public Backend {
       shapes.push_back({{s.x0, s.y0, s.x1, s.y1}, {s.r, s.g, s.b, s.a}, {s.corner, s.ring, s.pressed, 0.0f}, s.label, s.label_w, s.label_h, 0.0f});
     OvConstants oc{{ww, wh}, overlay_frame_.alpha, 0.0f, {}};
     std::memcpy(oc.labels, overlay_labels_, sizeof oc.labels);
-    [enc setViewport:MTLViewport{0, 0, ww, wh, 0, 1}];
     [enc setRenderPipelineState:overlay_pipeline_];
     [enc setVertexBytes:shapes.data() length:shapes.size() * sizeof(OvShape) atIndex:0];
     [enc setVertexBytes:&oc length:sizeof oc atIndex:1];
@@ -1049,6 +1153,11 @@ class MetalBackend final : public Backend {
   bool no_index_ = [] { const char* e = std::getenv("MELEE_METAL_NOINDEX"); return e && *e != '0'; }();   // diagnostic
   id<MTLTexture> overlay_atlas_ = nil;
   float overlay_labels_[16][4] = {};
+  id<MTLRenderPipelineState> text_pipeline_ = nil;
+  id<MTLTexture> glyph_atlas_ = nil;
+  Glyph glyphs_[96] = {};
+  float glyph_ascent_ = 0, glyph_font_px_ = 40;
+  bool text_logged_ = false;
   id<MTLDepthStencilState> clear_depth_state_ = nil;
   id<MTLSamplerState> blit_sampler_ = nil;
   id<MTLTexture> efb_color_ = nil, efb_depth_ = nil, white_ = nil;

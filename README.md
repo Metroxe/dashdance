@@ -94,6 +94,15 @@ The app follows Apple's current design language. On macOS 26 and iOS 26 the dash
 | **On-screen controls** (iPad, iPhone) | Opacity and size of the touch controller. |
 | **Menu bar extra** (Mac) | The Slippi mark in the menu bar with your rank next to it. The menu shows rating, record, placement, mains and your recent games, and has Play, Show iSlippi, Sign Out and Quit, from anywhere, including while a game is running. |
 
+### In-game menu and HUD
+
+Like the decomp ports (Ship of Harkinian and friends), iSlippi has a settings overlay inside the game. Hold **L + R + Start** for half a second on any controller, press **F1** or **Escape** on the keyboard, or tap the **MENU** button next to the touch controls. The game receives neutral inputs while it is up. Everything applies immediately and is remembered: internal resolution, anisotropic filtering, sharpening, display sync and full screen (Mac), volume, touch-control opacity and size (iPad, iPhone), widescreen (next launch) and a performance HUD. The HUD is one line in the corner: simulation time per frame, display refresh, late-frame count and the GameCube adapter's polling rate, the same numbers the measurement scripts use. The text is drawn by the Metal renderer from a CoreText glyph atlas, so it costs one extra draw.
+
+<div align="center">
+<img src="docs/images/ingame-menu.jpg" width="620" alt="The in-game settings menu open over a match on Icicle Mountain">
+<br><sub>The in-game menu over a match on macOS; the game underneath receives neutral inputs until you resume.</sub>
+</div>
+
 ### Controls
 
 | GameCube | Keyboard |
@@ -148,6 +157,28 @@ Touch controls appear automatically and fade away the moment a Bluetooth control
 <img src="docs/images/ipad-touch-controls.jpg" width="360" alt="iPad in portrait: the game on top, the touch controller below">
 <br><sub>iPad Pro in the Simulator, native resolution, controls below the game.</sub>
 </div>
+
+### Discord Rich Presence (Mac)
+
+Your Discord status follows the game, using the Discord application and artwork from the Slippi presence work ([slippi-rust-extensions #36](https://github.com/project-slippi/slippi-rust-extensions/pull/36)), built in, so there is nothing to set up:
+
+| Moment | Discord shows |
+|---|---|
+| Menus | "Slippi Online · In menus" with your rank badge |
+| Queue | "In queue - Ranked · Searching for an opponent", party 1 of 2 |
+| Matched | "Opponent found · vs NAME" with their rank badge |
+| In a game | The stage as the picture, your character as the badge, "Ranked - Game 2" and the live stock line "YOU 3 - 2 THEM", with a match timer |
+| After a game | "Ranked - Game 2 - Set 1-1 · YOU vs THEM - Game over" |
+
+Everyone who sees it gets a "Get Slippi" button and a "View Slippi Profile" link to your slippi.gg page. It talks to the Discord desktop app over its local socket: no login inside iSlippi, and nothing happens when Discord is not running. The Discord card on the dashboard turns it off or hides your rank. Menus, queue and opponent come from matchmaking; stage, characters, stocks and set score come from the replay event stream, never from game memory.
+
+### Matchmaking region
+
+Slippi's matchmaking places you by the region of your public IPv4 address, using [ipgeolocation.io](https://ipgeolocation.io). If that database has your address in the wrong place you get matched far from home. The dashboard's Matchmaking region card shows the IPv4 address the servers see, opens [ipgeolocation.io/what-is-my-ip](https://ipgeolocation.io/what-is-my-ip/) to check where it lands (make sure the page uses the IPv4, the one with dots), and copies a ready-to-send correction request for [their contact form](https://ipgeolocation.io/contact.html) with your address filled in.
+
+### Notifications, and what Slippi's servers can and cannot do
+
+There are no game invites in Slippi. The matchmaking server takes a ticket (`create-ticket` with your uid, play key, connect code, mode and, for Direct, the friend's code) and pairs it with a matching ticket; nobody is notified that a friend is looking for them, and the launcher's "notifications" are in-app toasts. The GraphQL API exposes your profile, ranked stats, chat messages and a few mutations, no presence, friends or subscriptions. So real push invites cannot be built on top of Slippi, and iSlippi does not pretend to. What it does: on the Mac, when a match is found while the app is not in front, it posts a system notification ("Match found: vs NAME (CODE), Ranked") so you can tab back in time. On iPhone and iPad the game cannot keep searching in the background, so there is nothing to notify.
 
 ### Built for the hardware
 

@@ -16,6 +16,7 @@ struct Dashboard {
   std::string profile_error;
   slippi::login::Profile profile;
   std::vector<slippi::history::Game> games;
+  std::string public_ipv4, ipv4_error;   // the address Slippi's matchmaking places you by
 
   std::string rank() const;            // "Gold II", "Pending", "Unranked"
   std::string rating() const;          // "1734.2"
@@ -27,5 +28,6 @@ struct Dashboard {
 };
 // Loads the saved session, refreshes the token and fetches the profile (blocking; run off the UI thread).
 bool dashboard_load_profile(const std::string& slippi_dir, Dashboard& d);
+bool dashboard_load_network(Dashboard& d);   // public IPv4 (api4.ipify.org)
 void dashboard_load_games(const std::string& replay_dir, Dashboard& d, size_t limit);
 }  // namespace host

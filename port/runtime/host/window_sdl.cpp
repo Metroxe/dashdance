@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "host.h"
 #include "controller_rate.h"
+#include "game_menu.h"
 #include "input_config.h"
 #include "input_script.h"
 #include "overlay.h"
@@ -160,6 +161,7 @@ void touch_event(const SDL_TouchFingerEvent& e) {
   g_touch_seen = true;
   touch_layout();
   const float px = e.x * (float)g_client_w, py = e.y * (float)g_client_h;
+  if (e.type == SDL_EVENT_FINGER_DOWN && menu_touch(px, py)) return;   // the menu (or its button) took the tap
   if (e.type == SDL_EVENT_FINGER_DOWN) {
     g_fingers.push_back({e.fingerID, px, py});
     // A finger that lands on a stick owns it until it lifts, even when it wanders off.
@@ -410,6 +412,7 @@ void window_pump() {
       case SDL_EVENT_GAMEPAD_REMOVED: close_gamepad(event.gdevice.which); break;
       case SDL_EVENT_KEY_DOWN:
         if (event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT) && !event.key.repeat) g_fullscreen_toggle.store(true);
+        if ((event.key.key == SDLK_F1 || event.key.key == SDLK_ESCAPE) && !event.key.repeat) menu_toggle();
         break;
       case SDL_EVENT_FINGER_DOWN: case SDL_EVENT_FINGER_MOTION: case SDL_EVENT_FINGER_UP: case SDL_EVENT_FINGER_CANCELED:
         touch_event(event.tfinger);
@@ -514,6 +517,7 @@ void input_poll(PadState out[4]) {
       if (g_capture.load()) { pads[0] = {}; pads[0].err = 0; }
     }
   } ui{out};
+  struct MenuPass { PadState* pads; ~MenuPass() { menu_frame(pads); } } menu_pass{out};   // after every input source, before the UI snapshot
   for (int i = 0; i < 4; ++i) { out[i] = {}; out[i].err = -1; }
   if (pad_file(out)) return;
   if (g_scripted) {
@@ -546,5 +550,17 @@ void input_poll(PadState out[4]) {
     taken[port] = true; read_gamepad(pad, out[port]); g_gamepad_port[port] = SDL_GetGamepadID(pad); ++port;
   }
   if (!(adapter_mask & 1u)) { out[0].err = 0; read_keyboard(out[0]); read_touch(out[0]); }
+}
+
+bool game_overlay(OverlayFrame& out) {
+  out.texts.clear();
+  const bool touch = touch_overlay(out);   // clears shapes, sets alpha to the touch fade
+  const float touch_alpha = out.alpha;
+  int w = 0, h = 0; window_client_size(&w, &h);
+  const size_t touch_shapes = out.shapes.size();
+  menu_overlay(out, w, h, touch);
+  // The touch controls fade with `alpha`; menu and HUD shapes are always fully opaque: bake the fade into the touch shapes instead.
+  if (out.shapes.size() > touch_shapes || !out.texts.empty()) { for (size_t i = 0; i < touch_shapes; ++i) out.shapes[i].a *= touch_alpha; out.alpha = 1.0f; }
+  return !out.shapes.empty() || !out.texts.empty();
 }
 }  // namespace host

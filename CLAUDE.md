@@ -30,9 +30,9 @@ committed; the disc stays where it is.
 | `port/app/main_mac.cpp` | The app entry point for all Apple platforms: options, launcher/dashboard, game loop start. |
 | `port/app/ios/`, `port/app/macos/` | Info.plist templates. |
 | `port/app/icons/AppIcon.icon` | Icon Composer bundle (Slippi mark as a glass layer). `tools/package_macos_app.sh` and CMake compile it with `actool`. |
-| `port/runtime/host/` | Host services: window + input (`window_sdl.cpp`), dashboards (`mac_launcher.mm`, `ios_launcher.mm`), controller mapping (`input_config.*`), dashboard model (`dashboard.*`), retrace/timing (`host.cpp`), touch overlay (`overlay.*`), GameCube adapter (`gc_adapter_iokit.cpp` on macOS: IOKit with a 1 ms pipe policy; `gc_adapter_libusb.cpp` elsewhere), controller report-rate measurement (`controller_rate.mm`). |
+| `port/runtime/host/` | Host services: window + input (`window_sdl.cpp`), dashboards (`mac_launcher.mm`, `ios_launcher.mm`), controller mapping (`input_config.*`), dashboard model (`dashboard.*`), retrace/timing (`host.cpp`), touch overlay (`overlay.*`), GameCube adapter (`gc_adapter_iokit.cpp` on macOS: IOKit with a 1 ms pipe policy; `gc_adapter_libusb.cpp` elsewhere), controller report-rate measurement (`controller_rate.mm`), in-game menu and HUD (`game_menu.*`, drawn through the Metal overlay's glyph atlas), local notifications (`notify_apple.mm`). |
 | `port/runtime/gx/` | The GX (GameCube GPU) translation and the Metal renderer (`gx_metal.mm`, `gx_msl.cpp`). |
-| `port/runtime/hle/` | High-level emulation of the GameCube SDK the game calls (disc, pads, audio, memory cards) and Slippi's EXI device, login (`slippi_login.*`) and replay parsing (`slippi_history.*`). |
+| `port/runtime/hle/` | High-level emulation of the GameCube SDK the game calls (disc, pads, audio, memory cards) and Slippi's EXI device, login (`slippi_login.*`), replay parsing (`slippi_history.*`), Discord Rich Presence over the local IPC socket (`discord_rpc.*`). |
 | `port/runtime/ppc/` | Guest CPU context, memory, interpreter fallback. |
 | `port/recomp/` | The recompiler configuration; `hle_list.txt` names the guest functions replaced by host code. |
 | `port/slippi_sys/` | Vendored Slippi game files (Sys folder). |
@@ -64,6 +64,9 @@ committed; the disc stays where it is.
   background shader compilation off for A/B tests.
 - `MELEE_DASHBOARD_SAMPLE=1` fills the dashboard with sample data; `MELEE_LAUNCHER_SCROLL=<pt>` starts
   it scrolled; `MELEE_MARK=<glyph.png>` shows the Slippi mark when running the bare binary.
+- `MELEE_MENU_OPEN=<retrace>` opens the in-game menu at that frame and `MELEE_HUD=1` turns the HUD on (screenshots);
+  `MELEE_DUMP_GLYPHS=<file.pgm>` writes the text atlas; `MELEE_DISCORD_APP_ID=<id>` points Discord presence at another application (the built-in id,
+  `slippi::discord::kApplicationId`, is iSlippi's own from slippi-rust-extensions PR 36, with its character, stage and rank artwork).
 - `MELEE_PAD_FILE=<file>` drives the game from a text file (one line per pad: `p=1 A sx=127`), which
   is how the scripted match tests work without a window in focus.
 - On the Simulator, prefix environment variables with `SIMCTL_CHILD_` and pass them to

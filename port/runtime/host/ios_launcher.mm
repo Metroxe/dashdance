@@ -302,6 +302,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
 // controllers
 @property(nonatomic) UIStackView* controllersStack; @property(nonatomic) NSTimer* controllerTimer; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic) std::string controllerSignature;
 // display
+@property(nonatomic) UILabel* regionLabel;
 @property(nonatomic) UISegmentedControl* scaleControl; @property(nonatomic) UISegmentedControl* anisoControl; @property(nonatomic) UISwitch* vsyncSwitch; @property(nonatomic) UISwitch* widescreenSwitch; @property(nonatomic) UISlider* sharpnessSlider; @property(nonatomic) UISwitch* onlineSwitch;
 @property(nonatomic) UISlider* overlaySlider; @property(nonatomic) UISlider* overlayScaleSlider;
 @property(nonatomic) UIButton* playButton;
@@ -356,14 +357,15 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   UIView* controllers = [self buildControllers];
   UIView* display = [self buildDisplay];
   UIView* touch = [self buildTouch];
+  UIView* regionCard = [self buildRegion];
   self.playButton = [self button:@"PLAY" symbol:@"play.fill" prominent:YES];
   [self.playButton addTarget:self action:@selector(play) forControlEvents:UIControlEventTouchUpInside];
   UILabel* footer = [[UILabel alloc] init];
   footer.text = @"Needs your own Super Smash Bros. Melee NTSC 1.02 disc image. Nothing from the game ships with the app. Unofficial; not affiliated with the Slippi team or Nintendo.";
   footer.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1]; footer.textColor = [UIColor colorWithWhite:1 alpha:0.45]; footer.numberOfLines = 0; footer.textAlignment = NSTextAlignmentCenter;
-  for (UIView* v in @[hero, self.stepsCard, self.rankedCard, self.gamesCard, self.accountCard, disc, controllers, display, touch, self.playButton, footer]) [self.stack addArrangedSubview:v];
+  for (UIView* v in @[hero, self.stepsCard, self.rankedCard, self.gamesCard, self.accountCard, disc, controllers, display, touch, regionCard, self.playButton, footer]) [self.stack addArrangedSubview:v];
   [self.stack setCustomSpacing:28 afterView:hero];
-  self.entrance = @[hero, self.stepsCard, self.rankedCard, self.gamesCard, self.accountCard, disc, controllers, display, touch, self.playButton];
+  self.entrance = @[hero, self.stepsCard, self.rankedCard, self.gamesCard, self.accountCard, disc, controllers, display, touch, regionCard, self.playButton];
   for (UIView* v in self.entrance) { v.alpha = 0; v.transform = CGAffineTransformMakeTranslation(0, 24); }
   [self refreshDisc]; [self refreshAccount]; [self refreshControllers]; [self refreshSteps];
   [self loadDashboard];
@@ -709,6 +711,33 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   return card;
 }
 
+- (UIView*)buildRegion {
+  UIView* card = [self panel];
+  UIStackView* s = [self stackIn:card];
+  [s addArrangedSubview:[self header:@"MATCHMAKING REGION" symbol:@"globe"]];
+  self.regionLabel = [self label:@"Checking your public IPv4 address…" size:15 weight:UIFontWeightMedium alpha:1];
+  [s addArrangedSubview:self.regionLabel];
+  [s addArrangedSubview:[self label:@"Slippi's matchmaking places you by the region of this address, looked up at ipgeolocation.io. If the lookup lands far from you, you get matched far from home. Check it; if it is wrong, send ipgeolocation the correction request (copied with your address filled in)." size:12 weight:UIFontWeightRegular alpha:0.6]];
+  UIButton* check = [self button:@"Check my region" symbol:@"location.magnifyingglass" prominent:NO];
+  [check addTarget:self action:@selector(openRegionCheck) forControlEvents:UIControlEventTouchUpInside];
+  UIButton* copy = [self button:@"Copy correction request" symbol:@"doc.on.doc" prominent:NO];
+  [copy addTarget:self action:@selector(copyRegionReport) forControlEvents:UIControlEventTouchUpInside];
+  [s addArrangedSubview:check]; [s addArrangedSubview:copy];
+  return card;
+}
+- (void)refreshRegion {
+  const host::Dashboard& d = self.dashboard;
+  if (!d.public_ipv4.empty()) self.regionLabel.text = [NSString stringWithFormat:@"Your public IPv4 address: %s", d.public_ipv4.c_str()];
+  else if (!d.ipv4_error.empty()) self.regionLabel.text = [NSString stringWithFormat:@"Could not determine your public IPv4 address (%s).", d.ipv4_error.c_str()];
+}
+- (void)openRegionCheck { [UIApplication.sharedApplication openURL:[NSURL URLWithString:@"https://ipgeolocation.io/what-is-my-ip/"] options:@{} completionHandler:nil]; }
+- (void)copyRegionReport {
+  const std::string ip = self.dashboard.public_ipv4.empty() ? "<insert IP here>" : self.dashboard.public_ipv4;
+  UIPasteboard.generalPasteboard.string = [NSString stringWithFormat:@"Hi,\nYour service reports my IP (%s) to be at <X location>, but I'm actually located at <Y location>. Could you correct this?\nThank you.", ip.c_str()];
+  haptic_notify(true);
+  self.regionLabel.text = [NSString stringWithFormat:@"Copied a correction request for %s. Paste it into the ipgeolocation contact form (ipgeolocation.io/contact.html).", ip.c_str()];
+}
+
 // ---- state
 - (void)refreshSteps {
   const BOOL disc = !self.settings->iso.empty(), account = self.dashboard.signed_in, pad = self.controllerCount > 0;
@@ -745,6 +774,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
 }
 - (void)refreshRanked {
   const host::Dashboard& d = self.dashboard;
+  if (self.settings) { self.settings->rank = d.profile_loaded && d.profile.ranked ? d.rank() : ""; self.settings->rating = d.profile.rating; }
   self.rankLabel.text = ns(d.rank());
   self.ratingLabel.text = ns(d.rating());
   self.recordLabel.text = d.profile_loaded ? ns(d.record()) : (d.profile_error.empty() ? @"Loading ranked profile…" : ns(d.profile_error));
@@ -850,10 +880,11 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
     host::Dashboard d;
     host::dashboard_load_games(replay_dir, d, 8);
     host::dashboard_load_profile(slippi_dir, d);
+    host::dashboard_load_network(d);
     dispatch_async(dispatch_get_main_queue(), ^{
       MULauncherController* s = weakSelf; if (!s || s.done) return;
       host::Dashboard merged = d; merged.signed_in = s.dashboard.signed_in || d.profile_loaded;
-      s.dashboard = merged; [s refreshAccount]; [s refreshGames];
+      s.dashboard = merged; [s refreshAccount]; [s refreshGames]; [s refreshRegion];
     });
   });
 }
