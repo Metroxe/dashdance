@@ -412,7 +412,7 @@ int main(int argc, char** argv) {
     gx::metal_set_overlay(backend, nullptr);
     delete backend;
   }
-  if (host::menu_changed()) {   // the in-game menu is the dashboard's twin: what it changed is remembered
+  if (host::menu_changed() && !std::getenv("MELEE_PAD_FILE") && !std::getenv("MELEE_MENU_OPEN")) {   // remembered, except for scripted test runs
     const host::RuntimeSettings rs = host::menu_settings();
     settings.scale = rs.scale; settings.anisotropy = rs.anisotropy; settings.sharpness = rs.sharpness; settings.widescreen = rs.widescreen; settings.vsync = rs.vsync;
     settings.volume = rs.volume; settings.overlay_opacity = rs.overlay_opacity; settings.overlay_scale = rs.overlay_scale; settings.hud = rs.hud; settings.fullscreen = rs.fullscreen;

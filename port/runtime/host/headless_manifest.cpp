@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "json_safe.h"
 #include "headless_manifest.h"
 #include "audio.h"
 #include "audio_headless.h"
@@ -127,8 +128,8 @@ bool HeadlessManifest::begin(const HeadlessOptions& options, int argc, const cha
     Json launch = {{"schema", "melee-native-headless-run-v1"}, {"phase", "prepared"}, {"command", command},
       {"executable", {{"path", executable}, {"sha256", executable_hash}}},
       {"input_manifest", {{"path", MELEE_PORT_INPUT_MANIFEST_PATH}, {"compiled_sha256", MELEE_PORT_INPUT_MANIFEST_SHA256}, {"actual_sha256", input_hash}}},
-      {"inputs", inputs}, {"upstream_pin", build.value("upstream_pin", Json::object())},
-      {"decomp_pin", build.value("decomp_pin", Json::object())}, {"gct_base", gecko::gct_base_used},
+      {"inputs", inputs}, {"upstream_pin", jget(build, "upstream_pin", Json::object())},
+      {"decomp_pin", jget(build, "decomp_pin", Json::object())}, {"gct_base", gecko::gct_base_used},
       {"bounds", {{"frames", o.frames}, {"time_base", o.time_base}, {"hang_watch_seconds", o.hang_watch}}},
       {"acceptance", {{"expect_scene", options.expect_scene}, {"expected_combined", options.expected_scene}}},
       {"capabilities", {{"offline", true}, {"strict_aot", !options.allow_interpreter}, {"gpu_presentation", false}, {"device_audio", false}}},

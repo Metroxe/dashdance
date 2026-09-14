@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <nlohmann/json.hpp>
+#include "json_safe.h"
 #include <atomic>
 #include <cstdio>
 #include <fstream>
@@ -86,13 +87,13 @@ void check(const std::string& current_version) {
     if (!http_get(REPO_API, &body, &status) || status != 200) { set_message(status ? "Update check failed (HTTP " + std::to_string(status) + ")" : "Update check failed (no connection)"); host::log("updater: GET %s failed, HTTP %d, error %lu", REPO_API, status, (unsigned long)GetLastError()); g_state = State::Failed; return; }
     auto list = nlohmann::json::parse(body, nullptr, false);
     nlohmann::json j;
-    if (list.is_array()) for (auto& r : list) if (r.is_object() && r.count("tag_name") && !r.value("draft", false)) { j = r; break; }
+    if (list.is_array()) for (auto& r : list) if (r.is_object() && r.count("tag_name") && !jget(r, "draft", false)) { j = r; break; }
     if (!j.is_object()) { set_message("Update check failed (bad response)"); g_state = State::Failed; return; }
     std::string tag = j["tag_name"].get<std::string>();
     if (!tag.empty() && tag[0] == 'v') tag.erase(0, 1);
     std::string zip;
     if (j.count("assets") && j["assets"].is_array())
-      for (auto& a : j["assets"]) if (a.is_object() && a.value("name", std::string()).find("win64.zip") != std::string::npos) zip = a.value("browser_download_url", std::string());
+      for (auto& a : j["assets"]) if (a.is_object() && jget(a, "name", std::string()).find("win64.zip") != std::string::npos) zip = jget(a, "browser_download_url", std::string());
     { std::lock_guard<std::mutex> lk(g_mutex); g_latest = tag; g_zip_url = zip; }
     if (newer(tag, g_current) && !zip.empty()) { set_message("Update available: " + tag); g_state = State::UpdateAvailable; host::log("updater: version %s available (running %s)", tag.c_str(), g_current.c_str()); }
     else { set_message("Up to date (" + g_current + ")"); g_state = State::UpToDate; }

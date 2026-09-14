@@ -13,6 +13,7 @@
 #endif
 #include <enet/enet.h>
 #include <nlohmann/json.hpp>
+#include "json_safe.h"
 #include <algorithm>
 #include <chrono>
 #include <climits>
@@ -104,11 +105,11 @@ bool User::AttemptLogin() {
   if (!f) { logged_in_ = false; return false; }
   try {
     json j = json::parse(f);
-    info_.uid = j.value("uid", "");
-    info_.play_key = j.value("playKey", "");
-    info_.display_name = j.value("displayName", "");
-    info_.connect_code = j.value("connectCode", "");
-    info_.latest_version = j.value("latestVersion", "");
+    info_.uid = jget(j, "uid", "");
+    info_.play_key = jget(j, "playKey", "");
+    info_.display_name = jget(j, "displayName", "");
+    info_.connect_code = jget(j, "connectCode", "");
+    info_.latest_version = jget(j, "latestVersion", "");
     info_.chat_messages.clear();
     if (j.count("chatMessages") && j["chatMessages"].is_array()) for (auto& m : j["chatMessages"]) info_.chat_messages.push_back(m.get<std::string>());
     if (info_.chat_messages.size() != 16) info_.chat_messages = GetDefaultChatMessages();
@@ -135,7 +136,7 @@ void DirectCodes::Load() {
   if (!f) return;
   try {
     json j = json::parse(f);
-    if (j.is_array()) for (auto& e : j) { std::string c = e.is_object() ? e.value("connectCode", "") : e.is_string() ? e.get<std::string>() : ""; if (!c.empty()) codes_.push_back(c); }
+    if (j.is_array()) for (auto& e : j) { std::string c = e.is_object() ? jget(e, "connectCode", "") : e.is_string() ? e.get<std::string>() : ""; if (!c.empty()) codes_.push_back(c); }
   } catch (...) {}
 }
 void DirectCodes::Save() {
@@ -868,8 +869,8 @@ void Matchmaking::startMatchmaking() {
   mm_send(server_, req);
   json resp;
   if (mm_receive(client_, resp, 5000) != 0) { state_ = ERROR_ENCOUNTERED; error_msg_ = "Failed to join mm queue"; return; }
-  if (resp.value("type", "") != "create-ticket-resp") { state_ = ERROR_ENCOUNTERED; error_msg_ = "Invalid response when joining mm queue"; host::log("slippi: mm response: %s", resp.dump().c_str()); return; }
-  std::string err = resp.value("error", "");
+  if (jget(resp, "type", "") != "create-ticket-resp") { state_ = ERROR_ENCOUNTERED; error_msg_ = "Invalid response when joining mm queue"; host::log("slippi: mm response: %s", resp.dump().c_str()); return; }
+  std::string err = jget(resp, "error", "");
   if (!err.empty()) { state_ = ERROR_ENCOUNTERED; error_msg_ = err; host::log("slippi: mm error: %s", err.c_str()); return; }
   state_ = MATCHMAKING;
   host::log("slippi: matchmaking ticket created");
@@ -881,9 +882,9 @@ void Matchmaking::handleMatchmaking() {
   int r = mm_receive(client_, resp, 2000);
   if (r == -1) return;
   if (r != 0) { state_ = ERROR_ENCOUNTERED; error_msg_ = "Lost connection to the mm server"; return; }
-  if (resp.value("type", "") != "get-ticket-resp") { state_ = ERROR_ENCOUNTERED; error_msg_ = "Invalid response when getting mm status"; return; }
-  std::string err = resp.value("error", "");
-  std::string latest = resp.value("latestVersion", "");
+  if (jget(resp, "type", "") != "get-ticket-resp") { state_ = ERROR_ENCOUNTERED; error_msg_ = "Invalid response when getting mm status"; return; }
+  std::string err = jget(resp, "error", "");
+  std::string latest = jget(resp, "latestVersion", "");
   if (!err.empty()) {
     if (!latest.empty()) user_->OverwriteLatestVersion(latest);
     state_ = ERROR_ENCOUNTERED; error_msg_ = err;
@@ -893,48 +894,48 @@ void Matchmaking::handleMatchmaking() {
   netplay_client_ = nullptr;
   remote_ips_.clear();
   player_info_.clear();
-  std::string match_id = resp.value("matchId", "");
+  std::string match_id = jget(resp, "matchId", "");
   host::log("slippi: match id %s", match_id.c_str());
   auto queue = resp["players"];
   if (queue.is_array()) {
     std::string local_external_ip;
     for (auto& el : queue) {
       UserInfo p;
-      bool is_local = el.value("isLocalPlayer", false);
-      p.uid = el.value("uid", "");
-      p.display_name = el.value("displayName", "");
-      p.connect_code = el.value("connectCode", "");
-      p.port = el.value("port", 0);
-      p.is_bot = el.value("isBot", false);
+      bool is_local = jget(el, "isLocalPlayer", false);
+      p.uid = jget(el, "uid", "");
+      p.display_name = jget(el, "displayName", "");
+      p.connect_code = jget(el, "connectCode", "");
+      p.port = jget(el, "port", 0);
+      p.is_bot = jget(el, "isBot", false);
       if (el.count("chatMessages") && el["chatMessages"].is_array()) {
         for (auto& m : el["chatMessages"]) if (m.is_string()) p.chat_messages.push_back(m.get<std::string>());
       }
       if (p.chat_messages.size() != 16) p.chat_messages = User::GetDefaultChatMessages();
       if (el.count("rank") && el["rank"].is_object()) {
         auto& rk = el["rank"];
-        p.ranked_rating = rk.value("rating", 0.0f);
-        p.ranked_update_count = rk.value("updateCount", 0);
-        p.ranked_global_placement = rk.value("globalPlacement", 0);
-        p.ranked_regional_placement = rk.value("regionalPlacement", 0);
+        p.ranked_rating = jget(rk, "rating", 0.0f);
+        p.ranked_update_count = jget(rk, "updateCount", 0);
+        p.ranked_global_placement = jget(rk, "globalPlacement", 0);
+        p.ranked_regional_placement = jget(rk, "regionalPlacement", 0);
       }
       player_info_.push_back(p);
       if (is_local) {
-        std::string ip = el.value("ipAddress", "1.1.1.1:123");
+        std::string ip = jget(el, "ipAddress", "1.1.1.1:123");
         local_external_ip = ip.substr(0, ip.find(':'));
         local_player_index_ = p.port - 1;
       }
     }
     for (auto& el : queue) {
-      if (el.value("port", 0) - 1 == local_player_index_) continue;
-      std::string ext = el.value("ipAddress", "1.1.1.1:123");
-      std::string lan = el.value("ipAddressLan", "1.1.1.1:123");
+      if (jget(el, "port", 0) - 1 == local_player_index_) continue;
+      std::string ext = jget(el, "ipAddress", "1.1.1.1:123");
+      std::string lan = jget(el, "ipAddressLan", "1.1.1.1:123");
       if (ext.substr(0, ext.find(':')) != local_external_ip || lan.empty()) remote_ips_.push_back(ext);
       else remote_ips_.push_back(lan);
     }
   }
-  is_host_ = resp.value("isHost", false);
+  is_host_ = jget(resp, "isHost", false);
   allowed_stages_.clear();
-  if (resp.count("stages") && resp["stages"].is_array()) for (auto& s : resp["stages"]) allowed_stages_.push_back((uint16_t)s.get<int>());
+  if (resp.count("stages") && resp["stages"].is_array()) for (auto& s : resp["stages"]) if (s.is_number()) allowed_stages_.push_back((uint16_t)s.get<int>());
   if (allowed_stages_.empty()) {
     allowed_stages_ = {0x3, 0x8, 0x1C, 0x1F, 0x20};
     if (player_info_.size() == 2) allowed_stages_.push_back(0x2);
@@ -942,7 +943,7 @@ void Matchmaking::handleMatchmaking() {
   mm_result_.id = match_id;
   mm_result_.players = player_info_;
   mm_result_.stages = allowed_stages_;
-  mm_result_.items = resp.value("items", 0u);
+  mm_result_.items = jget(resp, "items", 0u);
   terminateMmConnection();
   state_ = OPPONENT_CONNECTING;
   host::log("slippi: opponent found (decider: %d)", is_host_);

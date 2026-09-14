@@ -4,6 +4,7 @@
 #include "host.h"
 #include "slippi_login.h"
 #include <nlohmann/json.hpp>
+#include "json_safe.h"
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -229,7 +230,7 @@ void run() {
       }
       if (send) {
         static std::string last_logged;
-        const std::string summary = activity.value("details", "") + " | " + activity.value("state", "") + " | " + activity["assets"].value("large_image", "") + " " + activity["assets"].value("small_image", "");
+        const std::string summary = jget(activity, "details", "") + " | " + jget(activity, "state", "") + " | " + activity["assets"].value("large_image", "") + " " + activity["assets"].value("small_image", "");
         if (summary != last_logged) { last_logged = summary; host::log("discord: presence %s", summary.c_str()); }
         const json args = {{"pid", (int)::getpid()}, {"activity", activity}};
         const std::string frame = json{{"cmd", "SET_ACTIVITY"}, {"args", args}, {"nonce", std::to_string(now.time_since_epoch().count())}}.dump();

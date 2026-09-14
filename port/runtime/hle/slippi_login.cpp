@@ -2,6 +2,7 @@
 #include "slippi_login.h"
 #include "slippi_http_apple.h"
 #include <nlohmann/json.hpp>
+#include "json_safe.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -42,7 +43,7 @@ bool post_json(const std::string& url, const std::string& headers, const json& b
   try { reply = json::parse(response); } catch (const std::exception&) { reply = json::object(); }
   if (status < 200 || status >= 300) {
     std::string code;
-    if (auto it = reply.find("error"); it != reply.end() && it->is_object()) code = it->value("message", "");
+    if (auto it = reply.find("error"); it != reply.end() && it->is_object()) code = jget(*it, "message", "");
     error = code.empty() ? "Server error (" + std::to_string(status) + ")" : code;
     return false;
   }
@@ -62,9 +63,9 @@ static bool sign_in_impl(const std::string& email, const std::string& password, 
     if (error.rfind("No connection", 0) != 0 && error.rfind("Server error", 0) != 0) error = firebase_message(error);
     return false;
   }
-  const std::string token = reply.value("idToken", ""), uid = reply.value("localId", "");
+  const std::string token = jget(reply, "idToken", ""), uid = jget(reply, "localId", "");
   if (token.empty() || uid.empty()) { error = "Sign-in failed: no session token."; return false; }
-  if (session) { session->email = email; session->refresh_token = reply.value("refreshToken", ""); session->uid = uid; }
+  if (session) { session->email = email; session->refresh_token = jget(reply, "refreshToken", ""); session->uid = uid; }
 
   json user;
   if (!post_json(kGraphQL, "Content-Type: application/json\r\nAuthorization: Bearer " + token,
@@ -81,10 +82,10 @@ static bool sign_in_impl(const std::string& email, const std::string& password, 
   const json* u = data ? object_at(*data, "getUser") : nullptr;
   if (!u) { error = "Signed in, but this account has no Slippi profile yet. Finish setting it up at slippi.gg."; return false; }
   out.uid = uid;
-  out.display_name = u->value("displayName", "");
-  if (const json* code = object_at(*u, "connectCode")) out.connect_code = code->value("code", "");
-  if (const json* priv = object_at(*u, "private")) out.play_key = priv->value("playKey", "");
-  if (const json* dolphin = object_at(*data, "getLatestDolphin")) out.latest_version = dolphin->value("version", "");
+  out.display_name = jget(*u, "displayName", "");
+  if (const json* code = object_at(*u, "connectCode")) out.connect_code = jget(*code, "code", "");
+  if (const json* priv = object_at(*u, "private")) out.play_key = jget(*priv, "playKey", "");
+  if (const json* dolphin = object_at(*data, "getLatestDolphin")) out.latest_version = jget(*dolphin, "version", "");
   if (!out.valid()) { error = "This account has no connect code yet. Pick one at slippi.gg, then sign in again."; return false; }
   return true;
 }
@@ -99,7 +100,7 @@ bool refresh_id_token(const Session& session, std::string& id_token, std::string
   json reply;
   try { reply = json::parse(response); } catch (const std::exception&) { reply = json::object(); }
   if (status < 200 || status >= 300) { error = "Saved session expired; sign in again."; return false; }
-  id_token = reply.value("id_token", "");
+  id_token = jget(reply, "id_token", "");
   if (id_token.empty()) { error = "Saved session expired; sign in again."; return false; }
   return true;
 }
@@ -117,18 +118,18 @@ bool fetch_profile(const std::string& id_token, const std::string& uid, Profile&
   const json* u = data ? object_at(*data, "getUser") : nullptr;
   if (!u) { error = "No profile."; return false; }
   out = Profile();
-  out.display_name = u->value("displayName", "");
-  if (const json* code = object_at(*u, "connectCode")) out.connect_code = code->value("code", "");
+  out.display_name = jget(*u, "displayName", "");
+  if (const json* code = object_at(*u, "connectCode")) out.connect_code = jget(*code, "code", "");
   if (const json* r = object_at(*u, "rankedNetplayProfile")) {
     out.ranked = true;
-    out.rating = r->value("ratingOrdinal", 0.0f);
-    out.rating_updates = r->value("ratingUpdateCount", 0);
-    out.wins = r->value("wins", 0); out.losses = r->value("losses", 0);
-    out.global_placement = r->value("dailyGlobalPlacement", 0); out.regional_placement = r->value("dailyRegionalPlacement", 0);
-    out.continent = r->value("continent", "");
+    out.rating = jget(*r, "ratingOrdinal", 0.0f);
+    out.rating_updates = jget(*r, "ratingUpdateCount", 0);
+    out.wins = jget(*r, "wins", 0); out.losses = jget(*r, "losses", 0);
+    out.global_placement = jget(*r, "dailyGlobalPlacement", 0); out.regional_placement = jget(*r, "dailyRegionalPlacement", 0);
+    out.continent = jget(*r, "continent", "");
     auto it = r->find("characters");
     if (it != r->end() && it->is_array())
-      for (const json& c : *it) { CharacterUsage cu; cu.character = c.value("character", -1); cu.games = c.value("gameCount", 0); out.characters.push_back(cu); }
+      for (const json& c : *it) { CharacterUsage cu; cu.character = jget(c, "character", -1); cu.games = jget(c, "gameCount", 0); out.characters.push_back(cu); }
     std::sort(out.characters.begin(), out.characters.end(), [](const CharacterUsage& a, const CharacterUsage& b) { return a.games > b.games; });
   }
   return true;
@@ -165,7 +166,7 @@ const char* stage_name(int id) {
 bool read_session(const std::string& dir, Session& out) {
   std::ifstream f(dir + "/session.json");
   if (!f) return false;
-  try { json j = json::parse(f); out.email = j.value("email", ""); out.refresh_token = j.value("refreshToken", ""); out.uid = j.value("uid", ""); }
+  try { json j = json::parse(f); out.email = jget(j, "email", ""); out.refresh_token = jget(j, "refreshToken", ""); out.uid = jget(j, "uid", ""); }
   catch (const std::exception&) { return false; }
   return !out.refresh_token.empty();
 }
@@ -196,8 +197,8 @@ bool read_user_file(const std::string& dir, Account& out) {
   if (!f) return false;
   try {
     json j = json::parse(f);
-    out.uid = j.value("uid", ""); out.play_key = j.value("playKey", ""); out.connect_code = j.value("connectCode", "");
-    out.display_name = j.value("displayName", ""); out.latest_version = j.value("latestVersion", "");
+    out.uid = jget(j, "uid", ""); out.play_key = jget(j, "playKey", ""); out.connect_code = jget(j, "connectCode", "");
+    out.display_name = jget(j, "displayName", ""); out.latest_version = jget(j, "latestVersion", "");
   } catch (const std::exception&) { return false; }
   return out.valid();
 }

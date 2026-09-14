@@ -2,6 +2,7 @@
 #include "dashboard.h"
 #include "slippi_http_apple.h"
 #include <cstdio>
+#include <exception>
 #include <cstdlib>
 
 namespace host {
@@ -91,7 +92,13 @@ static bool sample_dashboard(Dashboard& d) {
   return true;
 }
 
+static bool dashboard_load_profile_unsafe(const std::string& slippi_dir, Dashboard& d);
 bool dashboard_load_profile(const std::string& slippi_dir, Dashboard& d) {
+  try { return dashboard_load_profile_unsafe(slippi_dir, d); }
+  catch (const std::exception& e) { d.profile_loaded = false; d.profile_error = std::string("Could not read your Slippi profile (") + e.what() + ")."; return false; }
+  catch (...) { d.profile_loaded = false; d.profile_error = "Could not read your Slippi profile."; return false; }
+}
+static bool dashboard_load_profile_unsafe(const std::string& slippi_dir, Dashboard& d) {
   if (sample_dashboard(d)) return true;
   slippi::login::Account account;
   d.signed_in = slippi::login::read_user_file(slippi_dir, account);
@@ -116,5 +123,7 @@ bool dashboard_load_network(Dashboard& d) {
   d.public_ipv4 = body;
   return true;
 }
-void dashboard_load_games(const std::string& replay_dir, Dashboard& d, size_t limit) { d.games = slippi::history::recent_games(replay_dir, limit); }
+void dashboard_load_games(const std::string& replay_dir, Dashboard& d, size_t limit) {
+  try { d.games = slippi::history::recent_games(replay_dir, limit); } catch (...) { d.games.clear(); }
+}
 }  // namespace host

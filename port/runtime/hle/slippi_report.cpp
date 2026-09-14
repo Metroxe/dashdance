@@ -18,6 +18,7 @@
 #include <openssl/md5.h>
 #endif
 #include <nlohmann/json.hpp>
+#include "json_safe.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -271,7 +272,7 @@ void hash_iso() {
 bool send_status(const StatusJob& s) {
   json vars = {{"report", {{"matchId", s.match_id}, {"fbUid", s.uid}, {"playKey", s.play_key}, {"status", s.status}}}};
   json data = graphql("mutation ($report: OnlineMatchStatusReportInput!) { reportOnlineMatchStatus (report: $report) }", vars);
-  bool ok = !data.is_null() && data.value("reportOnlineMatchStatus", false);
+  bool ok = !data.is_null() && jget(data, "reportOnlineMatchStatus", false);
   host::log("slippi report: match status '%s' for %s: %s", s.status.c_str(), s.match_id.c_str(), ok ? "accepted" : "failed");
   return ok;
 }
@@ -401,10 +402,10 @@ void fetch_user_rank(const std::string& uid) {
     if (j.is_discarded() || !j.is_object() || !j.count("rank") || !j["rank"].is_object()) { g_rank_status = RankFetchStatus::Error; host::log("slippi rank: user fetch HTTP %d, no rank in response", status); return; }
     auto& r = j["rank"];
     RankInfo info;
-    info.rating_ordinal = r.value("ratingOrdinal", 0.0f);
+    info.rating_ordinal = jget(r, "ratingOrdinal", 0.0f);
     info.global_placing = (uint16_t)(r.count("dailyGlobalPlacement") && r["dailyGlobalPlacement"].is_number() ? r["dailyGlobalPlacement"].get<int>() : 0);
     info.regional_placing = (uint16_t)(r.count("dailyRegionalPlacement") && r["dailyRegionalPlacement"].is_number() ? r["dailyRegionalPlacement"].get<int>() : 0);
-    info.rating_update_count = r.value("ratingUpdateCount", 0u);
+    info.rating_update_count = jget(r, "ratingUpdateCount", 0u);
     info.rank = decide_rank(info.rating_ordinal, info.global_placing, info.regional_placing, info.rating_update_count);
     { std::lock_guard<std::mutex> lk(g_rank_mutex); g_rank = info; }
     g_rank_status = RankFetchStatus::Fetched;
