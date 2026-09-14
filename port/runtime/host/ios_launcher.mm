@@ -454,9 +454,12 @@ int display_max_hz() {
   NSMutableArray* names = [NSMutableArray array];
   for (int i = 0; i < host::kPairingGuideCount; ++i) [names addObject:[NSString stringWithUTF8String:host::kPairingGuides[i].name]];
   UISegmentedControl* picker = [[UISegmentedControl alloc] initWithItems:names];
-  picker.selectedSegmentIndex = 0; picker.selectedSegmentTintColor = kYellow();
+  picker.selectedSegmentIndex = 0;
+#if !TARGET_OS_VISION   // visionOS draws its own glass segments; custom tints make the labels unreadable there
+  picker.selectedSegmentTintColor = kYellow();
   [picker setTitleTextAttributes:@{NSForegroundColorAttributeName: UIColor.blackColor} forState:UIControlStateSelected];
   [picker setTitleTextAttributes:@{NSForegroundColorAttributeName: UIColor.whiteColor} forState:UIControlStateNormal];
+#endif
   [picker addTarget:self action:@selector(guideChanged:) forControlEvents:UIControlEventValueChanged];
   [stack addArrangedSubview:picker];
   UIStackView* guide = [[UIStackView alloc] init]; guide.axis = UILayoutConstraintAxisHorizontal; guide.spacing = 12; guide.alignment = UIStackViewAlignmentTop;
@@ -777,6 +780,8 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   // windows keep one readable column in the same order.
   const BOOL wide = self.view.bounds.size.width >= 960;
   if (self.cardColumns && (self.cardColumns.axis == UILayoutConstraintAxisHorizontal) != wide) {
+    const BOOL atTop = self.scroll.contentOffset.y <= -self.scroll.adjustedContentInset.top + 1;   // a window resized while showing the top keeps showing the top
+    if (atTop) dispatch_async(dispatch_get_main_queue(), ^{ [self.scroll setContentOffset:CGPointMake(0, -self.scroll.adjustedContentInset.top) animated:NO]; });
     self.cardColumns.axis = wide ? UILayoutConstraintAxisHorizontal : UILayoutConstraintAxisVertical;
     self.cardColumns.distribution = wide ? UIStackViewDistributionFillEqually : UIStackViewDistributionFill;
     self.cardColumns.alignment = wide ? UIStackViewAlignmentTop : UIStackViewAlignmentFill;

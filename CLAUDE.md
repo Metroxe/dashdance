@@ -47,6 +47,9 @@ committed; the disc stays where it is.
 - **Toolchains.** macOS builds run with the Command Line Tools (`unset DEVELOPER_DIR`). iOS and
   visionOS builds need `export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`. Mixing
   them produces precompiled-header mismatches.
+- **Simulator runtimes.** Keep `xcode-select` on the Command Line Tools and prefix Xcode-only commands instead, e.g.
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -downloadPlatform visionOS`; without the prefix it fails
+  with "requires Xcode". With the visionOS 26 runtime, create the simulator from the `Apple-Vision-Pro-4K` device type.
 - **HLE hooks are matched by symbol name.** A name missing from `port/recomp/hle_list.txt` is silently
   recompiled instead of hooked (this is how a `longjmp` bug once corrupted guest memory).
 - **Never build while measuring performance**, and shut down Simulators first: both distort the
