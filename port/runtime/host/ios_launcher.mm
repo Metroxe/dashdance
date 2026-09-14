@@ -645,7 +645,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
 @property(nonatomic) UIStackView* controllersStack; @property(nonatomic) NSTimer* controllerTimer; @property(nonatomic) NSUInteger controllerCount; @property(nonatomic) std::string controllerSignature;
 // display
 @property(nonatomic) UILabel* regionLabel;
-@property(nonatomic) UISegmentedControl* scaleControl; @property(nonatomic) UISegmentedControl* anisoControl; @property(nonatomic) UISwitch* vsyncSwitch; @property(nonatomic) UISwitch* widescreenSwitch; @property(nonatomic) UISlider* sharpnessSlider; @property(nonatomic) UISwitch* onlineSwitch;
+@property(nonatomic) UISegmentedControl* scaleControl; @property(nonatomic) UISegmentedControl* anisoControl; @property(nonatomic) UISwitch* vsyncSwitch; @property(nonatomic) UISwitch* widescreenSwitch; @property(nonatomic) UISlider* sharpnessSlider; @property(nonatomic) UISwitch* onlineSwitch; @property(nonatomic) UISegmentedControl* delayControl;
 @property(nonatomic) UISlider* overlaySlider; @property(nonatomic) UISlider* overlayScaleSlider;
 @property(nonatomic) UIButton* playButton;
 @end
@@ -1125,6 +1125,9 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   [s addArrangedSubview:[self sliderRow:@"Sharpen" symbol:@"sparkles" slider:self.sharpnessSlider format:@"%.0f%%" scale:100]];
   self.onlineSwitch = [[UISwitch alloc] init]; self.onlineSwitch.on = self.settings->online; self.onlineSwitch.onTintColor = kYellow();
   [s addArrangedSubview:[self row:@"Slippi Online services" symbol:@"network" control:self.onlineSwitch]];
+  self.delayControl = [self segments:@[@"1", @"2", @"3", @"4"] selected:MAX(0, MIN(3, self.settings->online_delay - 1))];
+  [s addArrangedSubview:[self row:@"Online input delay (frames)" symbol:@"timer" control:self.delayControl]];
+  [s addArrangedSubview:[self label:@"Each frame of delay adds 16.7 ms. 1 is the lowest latency on a stable, nearby connection; 2 is Slippi's default and rolls back less on Wi-Fi. For online play a USB-C Ethernet adapter beats Wi-Fi." size:12 weight:UIFontWeightRegular alpha:0.6]];
   UIButton* preset = [self button:@"Competitive preset" symbol:@"bolt.fill" prominent:NO];
   [preset addTarget:self action:@selector(applyCompetitivePreset) forControlEvents:UIControlEventTouchUpInside];
   // Button on its own line with its explanation underneath: the title never hyphenates on a narrow phone.
@@ -1427,6 +1430,7 @@ static std::string controller_rate_line(const host::ControllerInfo& pad) {
   self.settings->vsync = self.vsyncSwitch.on;
   self.settings->widescreen = self.widescreenSwitch.on;
   self.settings->online = self.onlineSwitch.on;
+  if (self.settings->online_delay <= 4 || self.delayControl.selectedSegmentIndex != 3) self.settings->online_delay = (int)self.delayControl.selectedSegmentIndex + 1;   // keeps a larger value set by hand
   self.settings->sharpness = self.sharpnessSlider.value;
   self.settings->overlay_opacity = self.overlaySlider.value;
   self.settings->overlay_scale = self.overlayScaleSlider.value;

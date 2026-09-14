@@ -140,6 +140,7 @@ bool device_open() {
     g_target_frames = size_t(device_frames) * SAMPLE_RATE / std::max(device_spec.freq, 1) + SAMPLE_RATE * ring_slack_ms() / 1000;
   if (g_target_frames > RING_FRAMES / 2) g_target_frames = RING_FRAMES / 2;
   log("audio: device buffer %d frames at %d Hz, ring target %zu frames (%.0f ms of queued audio)", device_frames, device_spec.freq, g_target_frames, g_target_frames * 1000.0 / SAMPLE_RATE);
+  audio_session_report();   // iPhone, iPad, Vision Pro: the buffer and route the system granted
   g_priming = true;
   g_fill_average = 0.0;
   g_ring_phase = 0.0;

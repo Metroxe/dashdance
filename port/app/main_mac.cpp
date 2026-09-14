@@ -137,7 +137,7 @@ static void save_launcher_ini(const fs::path& path, const host::LauncherSettings
       << "\nsharpness=" << settings.sharpness << "\noverlay=" << settings.overlay_opacity << "\noverlay_scale=" << settings.overlay_scale
       << "\nscale=" << settings.scale << "\nanisotropy=" << settings.anisotropy << "\nvsync=" << (settings.vsync ? 1 : 0)
       << "\nfullscreen=" << (settings.fullscreen ? 1 : 0) << "\nvolume=" << settings.volume << "\nhud=" << (settings.hud ? 1 : 0)
-      << "\ndiscord=" << (settings.discord_enabled ? 1 : 0) << "\ndiscord_rank=" << (settings.discord_show_rank ? 1 : 0) << "\n";
+      << "\nonline_delay=" << settings.online_delay << "\ndiscord=" << (settings.discord_enabled ? 1 : 0) << "\ndiscord_rank=" << (settings.discord_show_rank ? 1 : 0) << "\n";
   for (const host::ControllerConfig& c : host::controller_configs()) out << "controller." << c.guid << "=" << c.port << "|" << c.map.serialize() << "\n";
   out << "keyboard=" << host::keyboard_map().serialize() << "\n";
 }
@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
   uint32_t window_w = 1280, window_h = 960;
   gx::MetalOptions gfx;
   std::string script, iso_arg, user_dir, sys_dir, replay_dir, card_dir, profile_dir, cache_dir, log_file;
-  bool offline = false, choose_disc = false, fullscreen_arg = false;
+  bool offline = false, choose_disc = false, fullscreen_arg = false, delay_arg = false;
   float overlay_opacity_arg = -1.0f, sharpness_arg = -1.0f;
   bool widescreen_arg = false;
   for (int i = 1; i < argc; ++i) {
@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
     else if (a == "--capture-every") gfx.capture_every = (uint32_t)std::strtoul(next(), nullptr, 0);
     else if (a == "--offline") offline = true;
     else if (a == "--user-dir") user_dir = next();
-    else if (a == "--online-delay") online.delay = std::atoi(next());
+    else if (a == "--online-delay") { online.delay = std::clamp(std::atoi(next()), 1, 9); delay_arg = true; }
     else if (a == "--chat") { std::string v = next(); online.chat = v == "off" ? 2 : v == "direct" ? 1 : 0; }
     else if (a == "--netplay-port") slippi::Matchmaking::forced_port = (uint16_t)std::atoi(next());
     else if (a == "--local-peer") {
@@ -225,6 +225,7 @@ int main(int argc, char** argv) {
       if (const char* v = value("iso=")) settings.iso = v;
       else if (const char* v = value("widescreen=")) settings.widescreen = *v == '1';
       else if (const char* v = value("online=")) settings.online = *v == '1';
+      else if (const char* v = value("online_delay=")) settings.online_delay = std::clamp(std::atoi(v), 1, 9);
       else if (const char* v = value("sharpness=")) settings.sharpness = std::clamp((float)std::atof(v), 0.0f, 1.0f);
       else if (const char* v = value("overlay=")) settings.overlay_opacity = std::clamp((float)std::atof(v), 0.0f, 1.0f);
       else if (const char* v = value("overlay_scale=")) settings.overlay_scale = std::clamp((float)std::atof(v), 0.7f, 1.4f);
@@ -284,6 +285,8 @@ int main(int argc, char** argv) {
   gfx.widescreen = widescreen_arg || settings.widescreen;
   gfx.sharpness = sharpness_arg >= 0.0f ? sharpness_arg : settings.sharpness;
   if (show_launcher) { gfx.efb_scale = settings.scale; gfx.anisotropy = settings.anisotropy; gfx.vsync = settings.vsync; if (!volume_arg) volume = settings.volume; }
+  if (!delay_arg) online.delay = std::clamp(settings.online_delay, 1, 9);   // the player's choice; each frame of delay adds 16.7 ms
+  host::log("slippi: online input delay %d frame%s (%.1f ms)", online.delay, online.delay == 1 ? "" : "s", online.delay * 16.667);
   host::touch_set_scale(settings.overlay_scale);
   host::touch_set_game_aspect(gfx.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f);
   if (profile_dir.empty()) profile_dir = (support / "User").string();
@@ -351,13 +354,14 @@ int main(int argc, char** argv) {
       host::RuntimeSettings rs;
       rs.scale = gfx.efb_scale; rs.anisotropy = gfx.anisotropy; rs.sharpness = gfx.sharpness; rs.widescreen = gfx.widescreen; rs.vsync = gfx.vsync;
       rs.volume = std::clamp(volume, 0, 100); rs.overlay_opacity = settings.overlay_opacity; rs.overlay_scale = settings.overlay_scale;
-      rs.hud = settings.hud; rs.fullscreen = settings.fullscreen || fullscreen_arg;
+      rs.hud = settings.hud; rs.fullscreen = settings.fullscreen || fullscreen_arg; rs.online_delay = online.delay;
       host::menu_init(rs, [backend, &gfx](const host::RuntimeSettings& s, host::MenuChange what) {
         switch (what) {
           case host::MenuChange::Graphics: gfx.efb_scale = s.scale; gfx.anisotropy = s.anisotropy; gfx.sharpness = s.sharpness; gfx.vsync = s.vsync; gx::metal_set_options(backend, gfx); break;
           case host::MenuChange::Volume: host::audio_set_volume(s.volume); break;
           case host::MenuChange::TouchControls: host::touch_set_opacity(s.overlay_opacity); host::touch_set_scale(s.overlay_scale); break;
           case host::MenuChange::Fullscreen: host::window_set_fullscreen(s.fullscreen); break;
+          case host::MenuChange::OnlineDelay: slippi::online::config().delay = s.online_delay; host::log("slippi: online input delay now %d frame%s, from the next match", s.online_delay, s.online_delay == 1 ? "" : "s"); break;
           case host::MenuChange::Hud: case host::MenuChange::Widescreen: break;
         }
       });
@@ -417,7 +421,7 @@ int main(int argc, char** argv) {
   if (host::menu_changed() && !std::getenv("MELEE_PAD_FILE") && !std::getenv("MELEE_MENU_OPEN")) {   // remembered, except for scripted test runs
     const host::RuntimeSettings rs = host::menu_settings();
     settings.scale = rs.scale; settings.anisotropy = rs.anisotropy; settings.sharpness = rs.sharpness; settings.widescreen = rs.widescreen; settings.vsync = rs.vsync;
-    settings.volume = rs.volume; settings.overlay_opacity = rs.overlay_opacity; settings.overlay_scale = rs.overlay_scale; settings.hud = rs.hud; settings.fullscreen = rs.fullscreen;
+    settings.volume = rs.volume; settings.overlay_opacity = rs.overlay_opacity; settings.overlay_scale = rs.overlay_scale; settings.hud = rs.hud; settings.fullscreen = rs.fullscreen; settings.online_delay = rs.online_delay;
     if (settings.iso.empty()) settings.iso = iso_arg;
     std::error_code ec; if (fs::is_directory(support, ec)) save_launcher_ini(remembered, settings);
   }

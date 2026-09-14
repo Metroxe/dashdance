@@ -522,6 +522,8 @@ void notify_local(const std::string&, const std::string&) {}
 void power_play_begin() {}
 void power_play_end() {}
 const char* thermal_state_name() { return "unknown"; }
+const char* latency_warning() { return ""; }
+void audio_session_report() {}
 #endif
 
 // ---- display phase lock (see host.h). Latency as a function of submission phase is a sawtooth:

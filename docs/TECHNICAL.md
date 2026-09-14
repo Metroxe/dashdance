@@ -24,6 +24,22 @@ The app follows Apple's [iPhone Duo guidelines](https://developer.apple.com/desi
   installed Xcode is older; build with Xcode 27.1 or later for the full fit. The reserved-region and hinge APIs (iOS 27.1) are not
   used yet because this tree still builds with the iOS 26 SDK, and nothing has been run on an iPhone Duo or its simulator yet.
 
+### Latency on iPhone, iPad and Vision Pro
+
+What the app does, and what only the player can change:
+
+| | |
+|---|---|
+| **Online input delay** | Slippi's delay frames are the biggest online latency setting: every frame adds 16.7 ms. The dashboard and the in-game menu offer 1 to 4 (`online_delay` in launcher.ini, 1..9, `--online-delay N`); 2 is Slippi's default. A menu change applies from the next match. 1 is lowest on a stable, nearby connection; on Wi-Fi 2 usually rolls back less. |
+| **Display held at full refresh** | While playing, a `CADisplayLink` on its own thread asks for the screen's maximum rate (120 Hz on ProMotion iPhones and iPads). Otherwise the system lowers the panel to 60 Hz for 60 fps content, and a finished frame can wait up to 16.7 ms instead of 8.3 ms. Menus go back to adaptive refresh. |
+| **Audio buffer** | The audio session asks for a 5 ms hardware buffer at 48 kHz (iOS defaults to about 20 ms) and for no system-alert interruptions; the log reports what was granted (`audio session: IO buffer ...`). |
+| **Honest warnings** | The performance HUD adds "Low Power Mode on" (the system limits the display and the CPU) and "Bluetooth audio lags" (wireless audio trails the picture by far more than any buffer). Both are logged too. |
+| **Already in place** | The game thread runs with real-time scheduling, inputs are read right before each frame, the render thread presents on the next refresh with a two-drawable swapchain, netplay sockets use Wi-Fi's voice traffic class, iPhones cap internal resolution at 2x and step down under heat, and Game Mode is declared. |
+| **Up to the player** | A USB-C Ethernet adapter beats Wi-Fi for online play. A USB-C controller beats Bluetooth where the device takes one. Turn off Low Power Mode. Use wired or built-in audio. |
+| **Vision Pro** | The system composites every window at the headset's fixed refresh rate, so there is no refresh to raise; the delay setting, controller and resolution choices still apply. |
+
+None of this has been measured on a physical iPhone, iPad or Vision Pro yet: the Simulator runs on the Mac's GPU at 60 Hz and has no presented-time API. On a device, `MELEE_METAL_LATENCY=1` logs frame-to-panel time.
+
 ## Why this exists
 
 Melee has always been an emulated game on the Mac: a PowerPC console, simulated instruction by instruction, with the netcode bolted onto the emulator. This project takes the other road.

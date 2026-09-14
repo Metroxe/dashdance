@@ -11,6 +11,7 @@ struct LauncherSettings {
   float overlay_opacity = 1.0f;// on-screen controller (touch devices)
   float overlay_scale = 1.0f;  // 0.7..1.4
   bool online = true;          // Slippi Online services
+  int online_delay = 2;        // Slippi Online input delay frames (1..9): each frame adds 16.7 ms; 2 is Slippi's default
   int scale = 0;               // internal resolution multiplier, 0 = auto
   int anisotropy = 16;         // 1, 4, 16
   bool vsync = true;           // display sync; off = uncapped presentation

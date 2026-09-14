@@ -1,6 +1,7 @@
 // See game_menu.h.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "game_menu.h"
+#include "host.h"
 #include "input_config.h"
 #include "window.h"
 #include <algorithm>
@@ -25,7 +26,7 @@ constexpr int kEscapeScancode = 41;   // SDL_SCANCODE_ESCAPE
 constexpr int kSkipFrames = 6 * 60;   // remap: a control left untouched for 6 s keeps its binding
 
 enum class Page { Main, Controls, Remap };
-enum MainRow { ROW_SCALE, ROW_ANISO, ROW_SHARPEN, ROW_VSYNC, ROW_WIDESCREEN, ROW_VOLUME, ROW_TOUCH_OPACITY, ROW_TOUCH_SIZE, ROW_FULLSCREEN, ROW_CONTROLS, ROW_HUD, ROW_RESUME, ROW_MAIN_COUNT };
+enum MainRow { ROW_SCALE, ROW_ANISO, ROW_SHARPEN, ROW_VSYNC, ROW_WIDESCREEN, ROW_VOLUME, ROW_TOUCH_OPACITY, ROW_TOUCH_SIZE, ROW_FULLSCREEN, ROW_ONLINE_DELAY, ROW_CONTROLS, ROW_HUD, ROW_RESUME, ROW_MAIN_COUNT };
 enum ControlsRow { C_DEVICE, C_REMAP, C_STICK_DZ, C_CSTICK_DZ, C_TRIGGER, C_SWAP, C_RUMBLE, C_TEST_RUMBLE, C_MODIFIER, C_RESET, C_BACK };
 struct Device { std::string guid, name; };   // an empty guid is the keyboard
 
@@ -74,6 +75,7 @@ const char* main_name(int r) {
     case ROW_TOUCH_OPACITY: return "Touch controls opacity";
     case ROW_TOUCH_SIZE: return "Touch controls size";
     case ROW_FULLSCREEN: return "Full screen";
+    case ROW_ONLINE_DELAY: return "Online input delay (next match)";
     case ROW_CONTROLS: return "Controls";
     case ROW_HUD: return "Performance HUD";
     case ROW_RESUME: return "Resume game";
@@ -92,6 +94,7 @@ std::string main_value(int r, const RuntimeSettings& s) {
     case ROW_TOUCH_OPACITY: std::snprintf(b, sizeof b, "%d%%", (int)std::lround(s.overlay_opacity * 100)); return b;
     case ROW_TOUCH_SIZE: std::snprintf(b, sizeof b, "%.2fx", s.overlay_scale); return b;
     case ROW_FULLSCREEN: return s.fullscreen ? "On" : "Off";
+    case ROW_ONLINE_DELAY: if (s.online_delay <= 1) return "1 frame (lowest)"; std::snprintf(b, sizeof b, "%d frames", s.online_delay); return b;
     case ROW_CONTROLS: return ">";
     case ROW_HUD: return s.hud ? "On" : "Off";
   }
@@ -110,6 +113,7 @@ int main_step(int r, int dir, RuntimeSettings& s) {
     case ROW_TOUCH_OPACITY: s.overlay_opacity = std::clamp(s.overlay_opacity + 0.1f * dir, 0.1f, 1.0f); return (int)MenuChange::TouchControls;
     case ROW_TOUCH_SIZE: s.overlay_scale = std::clamp(s.overlay_scale + 0.1f * dir, 0.7f, 1.4f); return (int)MenuChange::TouchControls;
     case ROW_FULLSCREEN: s.fullscreen = !s.fullscreen; return (int)MenuChange::Fullscreen;
+    case ROW_ONLINE_DELAY: { const int d = std::clamp(s.online_delay + dir, 1, 9); if (d == s.online_delay) return -1; s.online_delay = d; return (int)MenuChange::OnlineDelay; }
     case ROW_HUD: s.hud = !s.hud; return (int)MenuChange::Hud;
   }
   return -1;
@@ -390,10 +394,12 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     char line[200];
     std::snprintf(line, sizeof line, "sim %.1f ms   display %.0f Hz   late %llu%s%s", last_sim_frame_ms(), window_refresh_rate(), (unsigned long long)late_frame_count(),
                   have_adapter ? "   GC adapter " : "", have_adapter ? (adapter.report_hz >= 900 ? "1000 Hz" : adapter.report_hz > 0 ? "125 Hz" : "") : "");
-    const float h = unit * 0.7f, pad = h * 0.4f, w = h * 0.55f * (float)std::strlen(line) + pad * 2;
+    std::string hud = line;
+    if (const char* warn = latency_warning(); warn && *warn) { hud += "   "; hud += warn; }   // Low Power Mode, Bluetooth audio
+    const float h = unit * 0.7f, pad = h * 0.4f, w = h * 0.55f * (float)hud.size() + pad * 2;
     const float hx = pad + safe_l, hy = pad + safe_t;
     out.shapes.push_back({hx, hy, hx + w, hy + h + pad * 1.5f, 0.0f, 0.0f, 0.0f, 0.55f, h * 0.35f, 0.0f, 0.0f, 0, 0.0f, 0.0f});
-    out.texts.push_back({hx + pad, hy + pad * 0.6f, h, 1, 1, 1, 0.92f, 0, line, (float)ww - safe_l - safe_r - 4 * pad});
+    out.texts.push_back({hx + pad, hy + pad * 0.6f, h, 1, 1, 1, 0.92f, 0, hud, (float)ww - safe_l - safe_r - 4 * pad});
   }
   if (!g_open.load()) {
     if (touch_controls_visible) {   // MENU button, top-right
@@ -453,9 +459,9 @@ void menu_overlay(OverlayFrame& out, int ww, int wh, bool touch_controls_visible
     const bool steppable = main ? (r != ROW_RESUME && r != ROW_CONTROLS) : value_row(r);
     if (!value.empty()) out.texts.push_back({x1 - pad, ty, unit * 0.95f, 0.97f, 0.79f, 0.28f, sel ? 1.0f : 0.8f, 2, sel && steppable ? "<  " + value + "  >" : value, panel_w * 0.42f - pad});
   }
-  const char* hint = touch_controls_visible ? "Tap a row: left side lowers, right side raises.  Tap outside to go back."
-                   : g_page == Page::Main ? "Up/Down select   Left/Right change   A adjust   B or Start resume   (L+R+Start or F1 opens)"
-                                          : "Up/Down select   Left/Right change   A choose   B back";
+  const char* hint = touch_controls_visible ? "Tap a row's left or right side to change it"
+                   : g_page == Page::Main ? "Up/Down select   Left/Right change   B resume"
+                                          : "Up/Down select   Left/Right change   B back";
   out.texts.push_back({cx, y1 - pad - unit * 1.1f, unit * 0.7f, 1, 1, 1, 0.55f, 1, hint, panel_w - 2 * pad});
   g_layout = {x0, y0, x1, y1, row_h, top};
 }

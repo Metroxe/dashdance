@@ -70,6 +70,8 @@ Hold **L + R + Start**, or press **F1**. Change resolution, display sync, volume
 
 iSlippi also runs on iPhone, iPad and Apple Vision Pro. The touch controls feel like a GameCube controller, and they step aside the moment you connect a real one. Every screen fits the device you're holding, in portrait or landscape.
 
+**Fast on the go, too.** While you play, iSlippi keeps the display at its highest refresh rate, trims audio delay, and lets you choose Slippi's online input delay yourself. It also tells you when Low Power Mode or Bluetooth headphones are slowing things down.
+
 **Ready for iPhone Duo.** iSlippi follows Apple's iPhone Duo design guidelines. Hold it upright and the game sits above the fold with the controls below it. The dashboard splits into two columns around the fold when there's room. Controls and text stay the same size on both displays. And the space around the picture shows Melee's grid instead of black bars.
 
 <div align="center">

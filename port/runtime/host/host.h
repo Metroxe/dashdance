@@ -125,6 +125,11 @@ void power_play_begin();
 void notify_local(const std::string& title, const std::string& body);
 void power_play_end();
 const char* thermal_state_name();
+// A short note for the performance HUD when the device adds latency the app cannot remove (Low Power Mode, Bluetooth
+// audio); empty when nothing applies.
+const char* latency_warning();
+// iPhone, iPad, Vision Pro: logs the audio buffer and route the system actually granted (call after opening the device).
+void audio_session_report();
 double now_seconds();
 struct SimCostScope { int slot; double t0; explicit SimCostScope(int s) : slot(s), t0(now_seconds()) {} ~SimCostScope() { sim_cost_add(slot, now_seconds() - t0); } };
 
