@@ -30,3 +30,10 @@ replays/
 # Private working notes, never published
 HANDOFF_*.md
 NOTE_FOR_*.md
+
+# Re-include the app icon folder: a common global ignore ("Icon?" for Finder icon files) would otherwise hide it on case-insensitive disks.
+!port/app/icons/
+!port/app/icons/**
+
+# Local dependencies fetched by setup.sh (doldecomp checkout, the DOL extracted from your own disc): never committed.
+deps/

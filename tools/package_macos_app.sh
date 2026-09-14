@@ -19,7 +19,9 @@ cp "$ROOT/port/app/icons/AppIcon.icon/Assets/glyph.png" "$APP/Contents/Resources
 # App icon: the Icon Composer bundle (Slippi mark as a glass layer over the Slippi green) compiled by
 # actool into Assets.car + AppIcon.icns, so macOS 26 renders it as Liquid Glass. Older toolchains fall
 # back to the flat 1024px master.
-if xcrun --find actool >/dev/null 2>&1 && xcrun actool "$ROOT/port/app/icons/AppIcon.icon" --compile "$APP/Contents/Resources" \
+# actool lives in Xcode, not in the Command Line Tools; point at Xcode for this one step when it is installed.
+ACTOOL_DEV="${DEVELOPER_DIR:-}"; [[ -z "$ACTOOL_DEV" && -d /Applications/Xcode.app/Contents/Developer ]] && ACTOOL_DEV=/Applications/Xcode.app/Contents/Developer
+if [[ -n "$ACTOOL_DEV" ]] && DEVELOPER_DIR="$ACTOOL_DEV" xcrun --find actool >/dev/null 2>&1 && DEVELOPER_DIR="$ACTOOL_DEV" xcrun actool "$ROOT/port/app/icons/AppIcon.icon" --compile "$APP/Contents/Resources" \
      --output-format human-readable-text --warnings --errors --output-partial-info-plist "$(mktemp)" --app-icon AppIcon \
      --include-all-app-icons --enable-on-demand-resources NO --development-region en --target-device mac \
      --minimum-deployment-target 26.0 --platform macosx >/dev/null 2>&1 && [[ -f "$APP/Contents/Resources/AppIcon.icns" ]]; then

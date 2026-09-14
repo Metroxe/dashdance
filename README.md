@@ -39,6 +39,21 @@ Melee has always been an emulated game on the Mac: a PowerPC console, simulated 
 <br><sub>Character and stage select, full screen on a MacBook Pro. UCF and the Slippi netplay code are the real ones from the Slippi Launcher's game files.</sub>
 </div>
 
+## Quick start
+
+One command builds and opens the Mac app. It installs the tools it needs, fetches the game's symbol
+tables from the open-source decompilation, pulls `main.dol` out of your own disc image and packages
+`dist/iSlippi.app`:
+
+```bash
+git clone https://github.com/TheAndersMadsen/islippi.git && cd islippi
+./setup.sh /path/to/melee.iso
+```
+
+Add `--ios` or `--visionos` (with Xcode installed) for the iPad, iPhone or Vision Pro Simulator app.
+Coding agents: read [CLAUDE.md](CLAUDE.md) first; it has the layout, the build rules that bite and the
+diagnostics.
+
 ## Get playing
 
 You need an Apple Silicon Mac (or an iPad, iPhone or Vision Pro), your own **Super Smash Bros. Melee NTSC 1.02** disc image (`.iso` or `.gcm`), and a free [Slippi account](https://slippi.gg) for online play.
@@ -53,6 +68,11 @@ You need an Apple Silicon Mac (or an iPad, iPhone or Vision Pro), your own **Sup
 &nbsp;&nbsp;
 <img src="docs/images/ipad-launcher.jpg" width="300" alt="The same dashboard on iPad">
 <br><sub>The dashboard on macOS and iPad (shown with sample data). Ranked stats come from Slippi's profile API; recent games are read from your own replays.</sub>
+</div>
+
+<div align="center">
+<img src="docs/images/mac-menubar.jpg" width="460" alt="The macOS menu bar extra: rank, rating, record, mains, recent games, Play, Show iSlippi, Sign Out, Quit">
+<br><sub>On the Mac the Slippi mark sits in the menu bar with your rank; its menu has your stats and the actions that matter, even mid-game.</sub>
 </div>
 
 ### Design
@@ -71,6 +91,7 @@ The app follows Apple's current design language. On macOS 26 and iOS 26 the dash
 | **Controllers** | Every connected controller, its GameCube port (auto or fixed 1–4), and a remap flow: click a GameCube control, press the button you want. Mappings are saved per controller. |
 | **Display & performance** | Internal resolution (auto picks the display), anisotropic filtering, display sync, widescreen, sharpening, full screen on macOS, plus the GPU and the display's refresh rate so you can see what the app is running on. |
 | **On-screen controls** (iPad, iPhone) | Opacity and size of the touch controller. |
+| **Menu bar extra** (Mac) | The Slippi mark in the menu bar with your rank next to it. The menu shows rating, record, placement, mains and your recent games, and has Play, Show iSlippi, Sign Out and Quit, from anywhere, including while a game is running. |
 
 ### Controls
 
@@ -142,6 +163,8 @@ This is an alpha. Expect rough edges, and please report them.
 
 ## Build from source
 
+`./setup.sh` does all of the below. The manual steps, for people who want to see them:
+
 Requirements: Xcode Command Line Tools, Homebrew (`cmake ninja python libusb`), a checkout of [doldecomp/melee](https://github.com/doldecomp/melee) for the animation helpers, and your disc's `main.dol`.
 
 ```bash
@@ -153,7 +176,7 @@ python3 tools/bootstrap_port.py --decomp-root /path/to/doldecomp-melee \
 cmake -S . -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DMELEE_DECOMP_ROOT=/path/to/doldecomp-melee -DMELEE_DOL_PATH=/path/to/main.dol \
   -DMELEE_PORT_GENERATED_DIR=$PWD/build/mac/generated/guest \
-  -DMELEE_BUILD_PORT_TESTS=ON -DMELEE_BUILD_PORT_HEADLESS=ON -DMELEE_BUILD_PORT_METAL=ON
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DMELEE_BUILD_PORT_TESTS=ON -DMELEE_BUILD_PORT_HEADLESS=ON -DMELEE_BUILD_PORT_METAL=ON
 cmake --build build/mac --target melee_port_mac --parallel
 tools/package_macos_app.sh build/mac dist
 open dist/iSlippi.app
@@ -178,7 +201,7 @@ xcrun simctl install booted build/ios-sim/port/iSlippi.app
 
 Use `-DCMAKE_OSX_SYSROOT=iphoneos` for a device (sign the bundle with your team) and `-DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xrsimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=1.0` for the Vision Pro Simulator.
 
-`melee_port_mac --help` lists every option (window size, volume, input delay, explicit disc or Slippi folder). `melee_port_metal` and `melee_port_headless` are offline diagnostic executables used by the test suite. Developer notes live in [docs/](docs/).
+`melee_port_mac --help` lists every option (window size, volume, input delay, explicit disc or Slippi folder). `melee_port_metal` and `melee_port_headless` are offline diagnostic executables used by the test suite. Developer notes live in [docs/](docs/): [PERFORMANCE.md](docs/PERFORMANCE.md) explains every log signal and the measurement scripts, and [CLAUDE.md](CLAUDE.md) is the agent and contributor guide.
 
 ## Windows
 

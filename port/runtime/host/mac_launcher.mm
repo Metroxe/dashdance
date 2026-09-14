@@ -16,6 +16,19 @@
 #include <string>
 #include <vector>
 
+@class MULauncherWindow;
+// Menu bar extra (NSStatusItem): the Slippi mark in the menu bar with the player's rank, rating and
+// record, the last games, and the actions that make sense from anywhere: Play, show the dashboard,
+// sign out, quit. Built once per process; the dashboard feeds it, the game keeps it.
+@interface MUStatusBar : NSObject
+@property(nonatomic) NSStatusItem* item;
+@property(nonatomic, weak) MULauncherWindow* launcher;
+@property(nonatomic) host::Dashboard dashboard;
+@property(nonatomic) BOOL playing;
+- (void)refresh;
+@end
+static MUStatusBar* g_status = nil;
+
 // Help menu links (menu items need a target outside the responder chain).
 @interface MULinks : NSObject
 @end
@@ -277,6 +290,8 @@ API_AVAILABLE(macos(26.0))
 // display
 @property(nonatomic) NSSegmentedControl* scaleControl; @property(nonatomic) NSSegmentedControl* anisoControl; @property(nonatomic) NSSwitch* vsyncSwitch; @property(nonatomic) NSSwitch* fullscreenSwitch; @property(nonatomic) NSSwitch* widescreenSwitch; @property(nonatomic) NSSlider* sharpness; @property(nonatomic) NSSwitch* onlineSwitch;
 - (void)acceptDroppedDisc:(NSString*)path;
+- (void)play;
+- (void)signOut;
 @end
 
 @implementation MUDropView
@@ -653,6 +668,7 @@ API_AVAILABLE(macos(26.0))
   [self refreshRanked]; [self refreshSteps];
 }
 - (void)refreshRanked {
+  if (g_status) { g_status.dashboard = self.dashboard; [g_status refresh]; }
   const host::Dashboard& d = self.dashboard;
   self.rankLabel.stringValue = ns(d.rank()); self.ratingLabel.stringValue = ns(d.rating());
   self.recordLabel.stringValue = d.profile_loaded ? ns(d.record()) : (d.profile_error.empty() ? @"Loading ranked profile…" : ns(d.profile_error));
@@ -798,6 +814,7 @@ API_AVAILABLE(macos(26.0))
       MULauncherWindow* s = weakSelf; if (!s || s.closed || !s.settings) return;
       host::Dashboard merged = d; merged.signed_in = s.dashboard.signed_in || d.profile_loaded;
       s.dashboard = merged; [s refreshAccount]; [s refreshGames];
+      if (g_status) { g_status.dashboard = s.dashboard; [g_status refresh]; }
     });
   });
 }
@@ -873,6 +890,69 @@ API_AVAILABLE(macos(26.0))
 - (void)windowWillClose:(NSNotification*)notification { [NSApp stopModalWithCode:NSModalResponseCancel]; }
 @end
 
+@implementation MUStatusBar
+- (instancetype)init {
+  self = [super init];
+  self.item = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
+  NSImage* mark = slippi_mark();
+  if (mark) { mark.size = NSMakeSize(18, 18); self.item.button.image = mark; self.item.button.imagePosition = NSImageLeading; }
+  else self.item.button.title = @"iSlippi";
+  self.item.button.toolTip = @"iSlippi";
+  [self refresh];
+  return self;
+}
+- (NSMenuItem*)info:(NSString*)text {
+  NSMenuItem* i = [[NSMenuItem alloc] initWithTitle:text action:nil keyEquivalent:@""]; i.enabled = NO; return i;
+}
+- (void)refresh {
+  NSMenu* menu = [[NSMenu alloc] init];
+  menu.autoenablesItems = NO;
+  const host::Dashboard& d = self.dashboard;
+  if (d.signed_in) {
+    self.item.button.title = d.profile_loaded && d.profile.ranked ? ns("  " + d.rank()) : @"";
+    NSMenuItem* who = [self info:[NSString stringWithFormat:@"%s  %s", d.name.c_str(), d.code.c_str()]];
+    who.attributedTitle = [[NSAttributedString alloc] initWithString:who.title attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]}];
+    [menu addItem:who];
+    if (d.profile_loaded) {
+      [menu addItem:[self info:[NSString stringWithFormat:@"%s  ·  %s", d.rank().c_str(), d.rating().c_str()]]];
+      [menu addItem:[self info:ns(d.record())]];
+      if (!d.placement().empty()) [menu addItem:[self info:ns(d.placement())]];
+      std::string mains; for (const std::string& m : d.mains()) mains += (mains.empty() ? "" : "   ") + m;
+      if (!mains.empty()) [menu addItem:[self info:ns(mains)]];
+    } else {
+      [menu addItem:[self info:d.profile_error.empty() ? @"Loading ranked profile…" : ns(d.profile_error)]];
+    }
+    std::vector<host::GameRow> rows = d.rows();
+    if (!rows.empty()) {
+      [menu addItem:[NSMenuItem separatorItem]];
+      NSMenuItem* recent = [[NSMenuItem alloc] initWithTitle:@"Recent Games" action:nil keyEquivalent:@""];
+      NSMenu* sub = [[NSMenu alloc] init]; sub.autoenablesItems = NO;
+      for (size_t i = 0; i < rows.size() && i < 8; ++i) [sub addItem:[self info:[NSString stringWithFormat:@"%s  %s  ·  %s", rows[i].result.c_str(), rows[i].title.c_str(), rows[i].subtitle.c_str()]]];
+      recent.submenu = sub; [menu addItem:recent];
+    }
+  } else {
+    self.item.button.title = @"";
+    [menu addItem:[self info:@"Not signed in to Slippi"]];
+  }
+  [menu addItem:[NSMenuItem separatorItem]];
+  NSMenuItem* play = [[NSMenuItem alloc] initWithTitle:self.playing ? @"Playing…" : @"Play" action:@selector(playFromMenu:) keyEquivalent:@""];
+  play.target = self; play.enabled = !self.playing && self.launcher != nil; [menu addItem:play];
+  NSMenuItem* show = [[NSMenuItem alloc] initWithTitle:@"Show iSlippi" action:@selector(showApp:) keyEquivalent:@""];
+  show.target = self; [menu addItem:show];
+  if (d.signed_in && !self.playing && self.launcher) {
+    NSMenuItem* out = [[NSMenuItem alloc] initWithTitle:@"Sign Out of Slippi" action:@selector(signOutFromMenu:) keyEquivalent:@""];
+    out.target = self; [menu addItem:out];
+  }
+  [menu addItem:[NSMenuItem separatorItem]];
+  NSMenuItem* site = [[NSMenuItem alloc] initWithTitle:@"Slippi.gg" action:@selector(openSlippiSite:) keyEquivalent:@""]; site.target = g_links; [menu addItem:site];
+  NSMenuItem* quit = [[NSMenuItem alloc] initWithTitle:@"Quit iSlippi" action:@selector(terminate:) keyEquivalent:@"q"]; quit.target = NSApp; [menu addItem:quit];
+  self.item.menu = menu;
+}
+- (void)playFromMenu:(id)sender { if (self.launcher) [self.launcher play]; }
+- (void)showApp:(id)sender { [NSApp activateIgnoringOtherApps:YES]; for (NSWindow* w in NSApp.windows) if (w.isVisible) [w makeKeyAndOrderFront:nil]; }
+- (void)signOutFromMenu:(id)sender { if (self.launcher) [self.launcher signOut]; }
+@end
+
 namespace host {
 void mac_show_error(const std::string& title, const std::string& detail) {
   @autoreleasepool {
@@ -889,6 +969,10 @@ bool launcher_run(LauncherSettings& settings, const std::string& error) {
     settings.display_hz = display_max_hz(NSScreen.mainScreen);
     if (id<MTLDevice> gpu = MTLCreateSystemDefaultDevice()) settings.gpu_name = gpu.name.UTF8String;
     MULauncherWindow* launcher = [[MULauncherWindow alloc] initWithSettings:&settings error:error.empty() ? nil : [NSString stringWithUTF8String:error.c_str()]];
+    if (!g_status && !std::getenv("MELEE_NO_STATUS_ITEM")) g_status = [[MUStatusBar alloc] init];
+    if (g_status) { g_status.launcher = launcher; g_status.playing = NO; g_status.dashboard = launcher.dashboard; [g_status refresh]; }
+    if (g_status && std::getenv("MELEE_OPEN_STATUS_MENU"))   // screenshot aid: pop the menu bar extra open after the dashboard has loaded
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [g_status.item.button performClick:nil]; });
     [launcher.window makeKeyAndOrderFront:nil];
     [launcher animateIn];
     if (const char* scroll = std::getenv("MELEE_LAUNCHER_SCROLL"))   // screenshot aid: start scrolled down by N points
@@ -897,6 +981,7 @@ bool launcher_run(LauncherSettings& settings, const std::string& error) {
         if ([sv isKindOfClass:NSScrollView.class]) { [sv.contentView scrollToPoint:NSMakePoint(0, std::atof(scroll))]; [sv reflectScrolledClipView:sv.contentView]; } });
     NSModalResponse response = [NSApp runModalForWindow:launcher.window];
     launcher.closed = YES;
+    if (g_status) { g_status.launcher = nil; g_status.playing = response == NSModalResponseOK; [g_status refresh]; }
     [launcher.timer invalidate];
     launcher.settings = nullptr;   // an in-flight sign-in must not write into main's settings afterwards
     [launcher.window orderOut:nil];
