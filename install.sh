@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Dashdance installer for players. Paste this into Terminal:
 #
-#   curl -fsSL https://raw.githubusercontent.com/TheAndersMadsen/islippi/main/install.sh | zsh
+#   curl -fsSL https://raw.githubusercontent.com/TheAndersMadsen/dashdance/main/install.sh | zsh
 #
 # It checks the Mac, gets Apple's developer tools if needed, downloads (or updates) Dashdance into ~/Dashdance, asks for your
 # Melee disc image, builds the app from it on this Mac, puts Dashdance in Applications and opens it. Run it again to update.
@@ -26,7 +26,7 @@ if [[ -d "$DIR/.git" ]]; then
   git -C "$DIR" pull --ff-only --quiet
 else
   yellow "Downloading Dashdance into $DIR"
-  git clone --depth 1 --quiet https://github.com/TheAndersMadsen/islippi.git "$DIR"
+  git clone --depth 1 --quiet https://github.com/TheAndersMadsen/dashdance.git "$DIR"
 fi
 
 ISO="${1:-${DASHDANCE_ISO:-}}"

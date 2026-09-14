@@ -56,7 +56,7 @@ static MUStatusBar* g_status = nil;
 @interface MULinks : NSObject
 @end
 @implementation MULinks
-- (void)openGitHub:(id)sender { [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://github.com/TheAndersMadsen/islippi"]]; }
+- (void)openGitHub:(id)sender { [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://github.com/TheAndersMadsen/dashdance"]]; }
 - (void)openSlippiSite:(id)sender { [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://slippi.gg"]]; }
 @end
 static MULinks* g_links = nil;
