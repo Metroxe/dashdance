@@ -17,8 +17,9 @@ time until they go upstream as one PR. This section is fork-only: drop it from t
   plain bullet there in the same change. Keep it short.
 - Rebuild with `tools/mac/rebuild.sh`, never a bare cmake build (the input manifest must be regenerated after an edit).
 - Capture evidence by hand with `tools/mac/report.sh "what happened"`; list unreviewed logs with `tools/mac/unreviewed.sh`.
-- Desync ground truth: `tools/mac/slippi_frames.py <replay.slp> START END` renders those frames with Slippi's playback Dolphin
-  (re-simulated from inputs, resync off) into `reports/slippi-frames/`, plus `resim.slp` with Slippi's action states and positions.
+- Desyncs: `tools/mac/desync.py <replay.slp>` finds the first frame where Dashdance's recording differs from Slippi
+  Dolphin re-simulating it, checks whether headless Dashdance reproduces it, compares guest RAM at that frame and
+  renders Slippi's frames (`reports/desync/<replay>/report.md`; method in `docs/MAC_FIXES.md`).
 - The disc path is in `.disc-path`; `deps/melee` must stay at the pinned decomp commit `05a1394f`.
 
 ## One-command setup
