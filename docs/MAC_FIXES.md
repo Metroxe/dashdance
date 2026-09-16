@@ -3,9 +3,9 @@
 Fixes found by playing Dashdance on a MacBook Pro (M4 Pro, macOS 26) with a Mayflash adapter in Wii U mode.
 Each fix is its own commit on `christopher/mac-fixes`, so any subset can go upstream as a PR.
 
-How the loop works: play, hit a problem, run `tools/mac/report.sh "what happened"`, log it under
-Open issues with the report folder, fix it, rebuild with `tools/mac/rebuild.sh`, confirm in play,
-then move it to Fixed with the commit.
+How the loop works: play, then run `/fix-logs`. It reads the session logs and crash reports nobody has
+reviewed, logs what broke here, fixes it one commit at a time, rebuilds, and adds a bullet to `docs/PR.md`.
+A fix counts as confirmed once it has been played through again.
 
 ## Open issues
 
