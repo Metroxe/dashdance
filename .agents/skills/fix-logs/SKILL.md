@@ -56,7 +56,8 @@ For each fix:
    If Dashdance is running it only builds, and `tools/mac/rebuild.sh --install-only` installs later.
 3. Commit that fix alone. The message says what broke, the evidence, and why the change fixes it.
 4. Move or add the row in `docs/MAC_FIXES.md` (Fixed, with the short commit hash), and add one bullet to
-   `docs/PR.md` under "What this changes". Commit those docs changes.
+   `docs/PR.md` under the matching section (Fixes, Features, Logging, Debugging tools). Anything else
+   you add to the repo, such as a tool or logging, gets a plain bullet too. Commit those docs changes.
 5. `git push fork christopher/mac-fixes`.
 
 A fix is "confirmed" only after Christopher has played through the case again. Until then say
