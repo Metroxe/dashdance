@@ -11,12 +11,12 @@ Details and evidence for each are in `docs/MAC_FIXES.md`.
 - Write a log file for every Mac session (no Mac session ever wrote one, so crashes left no trace).
 - Keep the launcher from crashing when a replay's player name isn't valid UTF-8.
 - Show live ping in the performance HUD during online matches.
-- Add `tools/mac/` scripts: rebuild, capture a report, list unreviewed logs, probe the adapter, and render replay frames with Slippi's playback Dolphin (`slippi_frames.py`) as desync ground truth.
+- Fix a desync against Dolphin players on UCF shield drops: the recompiler now resumes a caller where a Gecko code returns past the call site (return address + 8), instead of right after the call.
+- Add `tools/mac/` scripts: rebuild, capture a report, list unreviewed logs, probe the adapter, and find desyncs (`desync.py`: Slippi Dolphin and headless Dashdance re-simulate a replay, diff every frame field, snapshot and compare guest RAM at the divergent frame, render Slippi's frames).
 
 ## Still open
 
 - Mid-match crash in recursive guest calls (`f_80373078` / `f_8036F1F8`), same class as Hero88go/melee-unlocked#5.
-- Shield-drop desync: Dashdance spot-dodges where Melee drops through the platform (first divergent frame 3791 in the logged replay).
 
 ## Before opening
 
