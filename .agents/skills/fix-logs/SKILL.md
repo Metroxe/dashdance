@@ -65,5 +65,17 @@ time on; leave it for the next run and say which.
 
 ## 5. Report
 
-Lead with the verdict: how many sessions reviewed, what broke, what got fixed. List each issue in one line
-with its status (fixed / logged / noise). Name anything that needs him to reproduce it in play.
+Open with one line: how many sessions and crash reports were reviewed, and how many problems they held.
+
+Then one short block per problem, in plain words (no function addresses unless they are the only name it has):
+
+```
+**<what he saw, e.g. "Crash in the middle of a match">** (<when>, <how many times>)
+- What went wrong: <the cause, in one or two sentences a player can follow>
+- Whose side: <for desyncs and disconnects: us, them, or unknown, and the log line that says so>
+- Fix: <what changed and why that stops it>, or "Not fixed yet: <why>, and what now gets logged to catch it"
+- Status: fixed and confirmed / fixed, not yet confirmed in play / logged only / noise
+```
+
+Files that were clean or noise get one line total, not a block each. End with what, if anything, he should
+try in play to confirm a fix.
