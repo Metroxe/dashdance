@@ -12,6 +12,7 @@ Details and evidence for each are in `docs/MAC_FIXES.md`.
 - Keep the launcher from crashing when a replay's player name isn't valid UTF-8.
 - Show live ping in the performance HUD during online matches.
 - Fix a desync against Dolphin players on UCF shield drops: the recompiler now resumes a caller where a Gecko code returns past the call site (return address + 8), instead of right after the call.
+- On a guest crash, log the guest call stack and all registers and save guest RAM next to the session log; log every rollback.
 - Add `tools/mac/` scripts: rebuild, capture a report, list unreviewed logs, probe the adapter, and find desyncs (`desync.py`: Slippi Dolphin and headless Dashdance re-simulate a replay, diff every frame field, snapshot and compare guest RAM at the divergent frame, render Slippi's frames).
 
 ## Still open

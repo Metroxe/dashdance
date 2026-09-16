@@ -24,7 +24,8 @@ session still being written if Dashdance is running. If it prints "Nothing unrev
 For each file, open the full log around the flagged lines, not just the grep. Match a crash report to its
 session log by time (the `.ips` timestamp falls inside the session). Classify:
 
-- **Crash**: `FATAL` reason, the "recent function entries" list, the `.ips` stack.
+- **Crash**: `FATAL` reason, the guest call stack, the `.ips` stack. Follow [crash.md](crash.md): the
+  session's `.ram` snapshot and `tools/mac/crashram.py` show the object that broke and who points at it.
 - **Desync**: `DESYNC: checksum mismatch at frame N`. Note the frame and which player, then follow
   [desync.md](desync.md): `tools/mac/desync.py <replay>` finds the first divergent frame against Slippi
   Dolphin, whether Dashdance reproduces it offline, and whether state or code diverged. Never guess a desync
@@ -45,8 +46,8 @@ and a clean Slippi Dolphin replay still matches its own recording (desync.md, st
 that could go upstream, following the repo's CLAUDE.md rules (the pinned-input manifest, strict AOT, no
 game data in the tree). If the root cause is not provable from the evidence, don't guess a fix: add the
 logging or tooling that would prove it next time, commit that, and say so. New diagnostic tools go in
-`tools/mac/` and get a row and their pitfalls in desync.md (or a sibling note here), so the next run can use
-them.
+`tools/mac/` and get written up in desync.md or crash.md (or a new sibling note linked here), so the next run
+can use them.
 
 For each fix:
 
