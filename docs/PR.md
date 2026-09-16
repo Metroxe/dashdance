@@ -11,6 +11,8 @@ Details and evidence for each are in `docs/MAC_FIXES.md`.
 - Keep the launcher from crashing when a replay's player name isn't valid UTF-8.
 - Fix desyncs against Dolphin players when UCF's shield drop fires. The Gecko code returns past its call site
   (return address + 8), and the recompiler now resumes the caller there instead of right after the call.
+- Fix the mid-match crash `guest call depth exceeded`. Guest `longjmp` unwinds as a C++ exception and skipped the
+  call counter's decrement, so stage animations leaked about one level a frame until a long session hit the limit.
 - The headless executable links again (it called Discord presence, which only the app has).
 
 ## Features
@@ -23,6 +25,7 @@ Details and evidence for each are in `docs/MAC_FIXES.md`.
 - On a guest crash, log the guest call stack and all registers, and save guest RAM next to the session log.
   `MELEE_TEST_FATAL_RETRACE=N` triggers a fake crash to test this.
 - Log every rollback (frame rolled back to, and from).
+- Log the guest call depth every 60 frames, so a leak shows up long before it crashes.
 
 ## Debugging tools we built
 
@@ -40,10 +43,6 @@ All in `tools/mac/`, written up for agents in the `fix-logs` skill (`desync.md`,
 - `ramdiff.py`: compares Dashdance's and Dolphin's memory field by field (fighters, animation).
 - `crashram.py`: shows what a crash's broken object is and what points at it.
 - `slp.py`: small replay reader the others share.
-
-## Still open
-
-- Mid-match crash in recursive guest calls (`f_80373078` / `f_8036F1F8`), same class as Hero88go/melee-unlocked#5.
 
 ## Before opening
 
