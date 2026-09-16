@@ -10,6 +10,7 @@ Details and evidence for each are in `docs/MAC_FIXES.md`.
 - Show the adapter's measured polling rate in the HUD instead of rounding anything under 900 Hz to "125 Hz".
 - Write a log file for every Mac session (no Mac session ever wrote one, so crashes left no trace).
 - Keep the launcher from crashing when a replay's player name isn't valid UTF-8.
+- Show live ping in the performance HUD during online matches.
 - Add `tools/mac/` scripts: rebuild, capture a report, list unreviewed logs, probe the adapter.
 
 ## Still open
